@@ -1,0 +1,141 @@
+#!/bin/env bash
+
+cat <<'EOF'
+======================================================================
+This script sets up a Minecraft server with the following configurations:
+- Server Folder: The directory where the server files are stored.
+- Server Version: The version of the Minecraft server to be deployed.
+  - used to compose jar filename upon download
+- JAR URL: The URL from which the Minecraft server JAR file is downloaded.
+
+Usage:
+minecraft/setup.sh --server-folder=<path> --server-version=<version> --jar-url=<url>
+
+The script is designed to be invoked as root via the UserData script of a
+linux game server instance (defined in a CloudFormation template).
+
+It expects to be executed from the repository root folder.
+
+The SetupCommand parameter must include the needed arguments.
+
+======================================================================
+EOF
+
+if [ ! -d ../AWS-Games ]; then
+  echo "setup must run from repository root"
+  exit 1
+fi
+
+# Initialize variables to hold the values of the arguments
+serverFolder=""
+serverVersion=""
+jarUrl=""
+
+# Error function to display an error message and exit
+error() {
+  echo "Error: $1" >&2
+  echo "Usage: $0 --server-folder=<path> --server-version=<version> --jar-url=<url>" >&2
+  exit 1
+}
+
+# Loop through arguments and process them
+for arg in "$@"
+do
+    case $arg in
+        --server-folder=*)
+        serverFolder="${arg#*=}"
+        ;;
+        --server-version=*)
+        serverVersion="${arg#*=}"
+        ;;
+        --jar-url=*)
+        jarUrl="${arg#*=}"
+        ;;
+        *)
+        # Unknown option
+        error "Unknown argument ${arg}"
+        ;;
+    esac
+done
+
+# Check if any of the required arguments are missing
+if [ -z "$serverFolder" ]; then
+    error "server-folder argument is required"
+fi
+if [ -z "$serverVersion" ]; then
+    error "server-version argument is required"
+fi
+if [ -z "$jarUrl" ]; then
+    error "jar-url argument is required"
+fi
+
+# If all arguments are provided, proceed with the rest of the script
+echo "Server Folder: $serverFolder"
+echo "Server Version: $serverVersion"
+echo "JAR URL: $jarUrl"
+
+
+echo "!! Install JDK"
+yum update -y
+yum install -y java-17-amazon-corretto-devel
+
+echo "!! Check Java version"
+java -version
+
+echo "!! Ensure /mnt/persist/minecraft exists and is owned by ec2-user"
+mkdir -p /mnt/persist/minecraft
+chown ec2-user:ec2-user /mnt/persist/minecraft
+
+echo "!! Ensure the server folder exists and is owned by ec2-user"
+mkdir -p "/mnt/persist/minecraft/${serverFolder}"
+chown ec2-user:ec2-user "/mnt/persist/minecraft/${serverFolder}"
+
+echo "!! Write /etc/systemd/system/minecraft-server.service"
+cat << EOF > /etc/systemd/system/minecraft-server.service
+[Unit]
+Description=Minecraft Server
+After=network.target
+
+[Service]
+User=ec2-user
+WorkingDirectory=/mnt/persist/minecraft/${serverFolder}
+ExecStart=/mnt/persist/minecraft/${serverFolder}/start-minecraft.sh
+ExecStop=/mnt/persist/minecraft/${serverFolder}/stop-minecraft.sh
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+startScriptPath="/mnt/persist/minecraft/${serverFolder}/start-minecraft.sh"
+echo "!! Install the start-minecraft.sh wrapper script at $startScriptPath"
+cp minecraft/start-minecraft.sh "$startScriptPath"
+# Make the script executable
+chmod +x "$startScriptPath"
+# Ensure the script is owned by ec2-user
+chown ec2-user:ec2-user "$startScriptPath"
+
+stopScriptPath="/mnt/persist/minecraft/${serverFolder}/stop-minecraft.sh"
+echo "!! Install the stop-minecraft.sh wrapper script at $stopScriptPath"
+cp minecraft/stop-minecraft.sh "$stopScriptPath"
+# Make the script executable
+chmod +x "$stopScriptPath"
+# Ensure the script is owned by ec2-user
+chown ec2-user:ec2-user "$stopScriptPath"
+
+jarPath="/home/ec2-user/minecraft_server_${serverVersion}.jar"
+echo "!! Download Minecraft server JAR to $jarPath"
+sudo -u ec2-user wget -O "$jarPath" "$jarUrl"
+
+symlinkPath="/mnt/persist/minecraft/${serverFolder}/minecraft_server.jar"
+echo "!! Symlink the jar to $symlinkPath"
+sudo -u ec2-user ln -s "$jarPath" "$symlinkPath"
+
+echo "!! reload systemd"
+# Reload systemd to recognize the new service and enable it to start on boot
+systemctl daemon-reload
+systemctl enable minecraft-server.service
+
+# echo "!! start minecraft-server"
+# systemctl start minecraft-server.service
+# ? consider rebooting here..

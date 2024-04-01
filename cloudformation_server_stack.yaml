@@ -1,0 +1,125 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS CloudFormation Template for a hosted game server
+
+Parameters:
+  ServerPortNumberStart:
+    Type: Number
+    Description: First TCP port for game server traffic
+
+  ServerPortNumberEnd:
+    Type: Number
+    Description: Last TCP port for game server traffic
+
+  SetupCommand:
+    Type: String
+    Description: Defines the setup invocation. Permits code execution. Direct secrets prohibited.
+
+  ExistingVolumeId:
+    Type: String
+    Description: ID of an existing EBS volume to attach. Leave empty to create a new volume.
+    Default: ""
+
+Conditions:
+  CreateNewVolume: !Equals [ !Ref ExistingVolumeId, "" ]
+
+Resources:
+  ServerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.large  # 8GB, 2vcpu, 0.1056 USD/hour
+      ImageId: ami-02765a2a1f276edff  # Amazon Linux 2 AMI (HVM) - Kernel 5.10, SSD Volume Type, 64-bit (x86)  /  https://ap-southeast-4.console.aws.amazon.com/ec2/home?region=ap-southeast-4#AMICatalog:
+      KeyName: tim_ssh_to_game_server  # EC2 / key pairs
+      SecurityGroupIds:
+        - !Ref ServerSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          
+          # Australia/Melbourne should be all that anyone will ever need... right?
+          timedatectl set-timezone Australia/Melbourne
+
+          echo "!! Check whether the attached volume is formatted.."
+          REAL_DEVICE=$(sudo readlink -f /dev/sdf)
+          echo "/dev/sdf maps to $REAL_DEVICE by symlink check"
+          if [ "$(sudo file -s $REAL_DEVICE | awk '{print $2}')" == "data" ]; then
+              echo "$REAL_DEVICE is not formatted, formatting as ext4..."
+              sudo mkfs -t ext4 $REAL_DEVICE
+          else
+              echo "$REAL_DEVICE is already formatted."
+          fi
+
+          echo "!! Mount the attached volume to /mnt/persist"
+          sudo mkdir -p /mnt/persist
+          sudo mount $REAL_DEVICE /mnt/persist
+          echo "$REAL_DEVICE /mnt/persist ext4 defaults,nofail 0 2" | sudo tee -a /etc/fstab > /dev/null
+
+          echo "!! Clone and use AWS-Games"
+          yum install -y git
+          cd /home/ec2-user
+          git clone https://github.com/TSheahan/AWS-Games.git
+          chown -R ec2-user:ec2-user AWS-Games
+          cd AWS-Games
+          
+          echo "!! Execute SetupCommand"
+          # as root, invoke the setup command, expecting it to handle system & user setup tasks
+          # use due caution for code execution capability
+          ${SetupCommand}
+          
+
+  NewVolume:
+    Type: AWS::EC2::Volume
+    Condition: CreateNewVolume
+    Properties:
+      Size: 10  # Adjust as needed for world files - 1.13GB after 1 months minecraft play
+      VolumeType: gp3
+      AvailabilityZone: !GetAtt ServerInstance.AvailabilityZone
+      Tags:
+        - Key: "Purpose"
+          Value: "GameServerPersistentFiles"
+    DeletionPolicy: Retain
+
+  PersistentVolumeAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref ServerInstance
+      VolumeId: !If [CreateNewVolume, !Ref NewVolume, !Ref ExistingVolumeId]
+      Device: /dev/sdf
+
+  ServerEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref ServerInstance
+
+  ServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH and game traffic
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: !Ref ServerPortNumberStart  # Destination port range start
+          ToPort: !Ref ServerPortNumberEnd      # Destination port range end
+          CidrIp: 0.0.0.0/0
+
+Outputs:
+  ServerIP:
+    Description: IP Address of the server
+    Value: !Ref ServerEIP
+  ServerPortStart:
+    Description: First TCP port used for the server
+    Value: !Ref ServerPortNumberStart
+  ServerPortEnd:
+    Description: Last TCP port used for the server
+    Value: !Ref ServerPortNumberEnd
+  SetupCommand:
+    Description: Displays the SetupCommand which was used at instance instantiation
+    Value: !Ref SetupCommand
+  NewVolumeId:
+    Description: The ID of the newly created EBS volume (if created).
+    Value: !If [ CreateNewVolume, !Ref NewVolume, "" ]
+  ExistingVolumeId:
+    Description: Mirrors the input for optional existing EBS volume ID.
+    Value: !Ref ExistingVolumeId
