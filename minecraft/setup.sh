@@ -30,11 +30,12 @@ fi
 serverFolder=""
 serverVersion=""
 jarUrl=""
+javaPackage=""
 
 # Error function to display an error message and exit
 error() {
   echo "Error: $1" >&2
-  echo "Usage: $0 --server-folder=<path> --server-version=<version> --jar-url=<url>" >&2
+  echo "Usage: $0 --server-folder=<path> --server-version=<version> --jar-url=<url> --java-package=<package>" >&2
   exit 1
 }
 
@@ -51,7 +52,9 @@ do
         --jar-url=*)
         jarUrl="${arg#*=}"
         ;;
-        *)
+        --java-package=*)
+        $javaPackage="${arg#*=}"
+        ;;        *)
         # Unknown option
         error "Unknown argument ${arg}"
         ;;
@@ -68,16 +71,19 @@ fi
 if [ -z "$jarUrl" ]; then
     error "jar-url argument is required"
 fi
+if [ -z "$javaPackage" ]; then
+    error "java-package argument is required"
+fi
 
 # If all arguments are provided, proceed with the rest of the script
 echo "Server Folder: $serverFolder"
 echo "Server Version: $serverVersion"
 echo "JAR URL: $jarUrl"
-
+echo "Java package: $javaPackage"
 
 echo "!! Install JDK"
 yum update -y
-yum install -y java-17-amazon-corretto-devel
+yum install -y "$javaPackage"
 
 echo "!! Check Java version"
 java -version

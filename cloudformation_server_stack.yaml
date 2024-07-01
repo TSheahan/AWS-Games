@@ -27,7 +27,7 @@ Resources:
     Type: AWS::EC2::Instance
     Properties:
       InstanceType: t3.large  # 8GB, 2vcpu, 0.1056 USD/hour
-      ImageId: ami-02765a2a1f276edff  # Amazon Linux 2 AMI (HVM) - Kernel 5.10, SSD Volume Type, 64-bit (x86)  /  https://ap-southeast-4.console.aws.amazon.com/ec2/home?region=ap-southeast-4#AMICatalog:
+      ImageId: ami-09c2ae4b214fc8e0e  # Amazon Linux 2023 AMI 64-bit (x86)  /  https://ap-southeast-4.console.aws.amazon.com/ec2/home?region=ap-southeast-4#AMICatalog:
       KeyName: tim_ssh_to_game_server  # EC2 / key pairs
       SecurityGroupIds:
         - !Ref ServerSecurityGroup
