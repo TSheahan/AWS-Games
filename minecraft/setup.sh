@@ -7,9 +7,10 @@ This script sets up a Minecraft server with the following configurations:
 - Server Version: The version of the Minecraft server to be deployed.
   - used to compose jar filename upon download
 - JAR URL: The URL from which the Minecraft server JAR file is downloaded.
+- Java Package: the package to install for java on the server
 
 Usage:
-minecraft/setup.sh --server-folder=<path> --server-version=<version> --jar-url=<url>
+minecraft/setup.sh --server-folder=<path> --server-version=<version> --jar-url=<url> --java-package=<package>
 
 The script is designed to be invoked as root via the UserData script of a
 linux game server instance (defined in a CloudFormation template).
@@ -53,8 +54,9 @@ do
         jarUrl="${arg#*=}"
         ;;
         --java-package=*)
-        $javaPackage="${arg#*=}"
-        ;;        *)
+        javaPackage="${arg#*=}"
+        ;;
+        *)
         # Unknown option
         error "Unknown argument ${arg}"
         ;;
