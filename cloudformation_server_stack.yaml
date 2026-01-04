@@ -65,25 +65,54 @@ Resources:
           # Australia/Melbourne should be all that anyone will ever need... right?
           timedatectl set-timezone Australia/Melbourne
 
-          echo "!! Detect secondary EBS volume (non-root disk)"
-          # Find the secondary block device: disk, ~10G (or larger), not mounted, not root (nvme0n1)
-          SECONDARY_DEVICE=$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT -p -n -b | awk '
-            $3 == "disk" && $4 == "" && $1 !~ /nvme0n1/ && int($2/1024/1024/1024) >= 8 {print $1; exit}
-          ')
+          echo "!! Detect and mount persistent volume"
+          # Common NVMe pattern for secondary volume on Nitro
+          EXPECTED_DEVICE="/dev/nvme1n1"
 
-          if [ -z "$SECONDARY_DEVICE" ]; then
-              echo "Error: Could not detect secondary EBS volume. Available devices:"
-              lsblk
-              exit 1
+          if [ -n "${ExistingVolumeId}" ] && [ "${ExistingVolumeId}" != "" ]; then
+              echo "Reusing existing volume — waiting for device $EXPECTED_DEVICE to appear (up to 120s)"
+              REAL_DEVICE=""
+              for i in {1..24}; do  # 24 * 5s = 120s timeout
+                  if [ -b "$EXPECTED_DEVICE" ]; then
+                      REAL_DEVICE="$EXPECTED_DEVICE"
+                      echo "Device $REAL_DEVICE detected."
+                      break
+                  fi
+                  echo "Waiting for $EXPECTED_DEVICE... ($i/24)"
+                  sleep 5
+              done
+
+              if [ -z "$REAL_DEVICE" ]; then
+                  echo "Error: Timed out waiting for $EXPECTED_DEVICE. Available devices:"
+                  lsblk
+                  exit 1
+              fi
+          else
+              echo "Creating new volume — detecting secondary disk"
+              REAL_DEVICE=""
+              for i in {1..12}; do  # Shorter wait for new volumes
+                  SECONDARY_DEVICE=$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT -p -n -b | awk '
+                    $3 == "disk" && $4 == "" && $1 !~ /nvme0n1/ && int($2/1024/1024/1024) >= 8 {print $1; exit}
+                  ')
+                  if [ -n "$SECONDARY_DEVICE" ]; then
+                      REAL_DEVICE=$(readlink -f "$SECONDARY_DEVICE")
+                      echo "Detected new volume: $REAL_DEVICE"
+                      break
+                  fi
+                  echo "Waiting for secondary disk... ($i/12)"
+                  sleep 5
+              done
+
+              if [ -z "$REAL_DEVICE" ]; then
+                  echo "Error: Could not detect secondary EBS volume. Available devices:"
+                  lsblk
+                  exit 1
+              fi
           fi
 
-          echo "Detected secondary volume: $SECONDARY_DEVICE"
+          echo "Using device: $REAL_DEVICE"
 
-          # Resolve any symlinks (e.g., /dev/nvme1n1 → itself)
-          REAL_DEVICE=$(readlink -f "$SECONDARY_DEVICE")
-          echo "$SECONDARY_DEVICE maps to $REAL_DEVICE"
-
-          echo "!! Check if the volume is formatted"
+          echo "!! Check if the volume needs formatting"
           if [ "$(file -s "$REAL_DEVICE" | awk '{print $2}')" == "data" ]; then
               echo "$REAL_DEVICE is not formatted, formatting as ext4..."
               mkfs -t ext4 "$REAL_DEVICE"
@@ -91,7 +120,7 @@ Resources:
               echo "$REAL_DEVICE is already formatted."
           fi
 
-          echo "!! Mount the attached volume to /mnt/persist"
+          echo "!! Mount the volume to /mnt/persist"
           mkdir -p /mnt/persist
           mount "$REAL_DEVICE" /mnt/persist
           if [ $? -ne 0 ]; then
