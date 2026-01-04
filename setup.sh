@@ -10,7 +10,7 @@ This script sets up a Minecraft server with the following configurations:
 - Java Package: the package to install for java on the server
 
 Usage:
-minecraft/setup.sh --server-folder=<path> --server-version=<version> --jar-url=<url> --java-package=<package>
+setup.sh --server-folder=<path> --server-version=<version> --jar-url=<url> --java-package=<package>
 
 The script is designed to be invoked as root via the UserData script of a
 linux game server instance (defined in a CloudFormation template).
@@ -22,8 +22,8 @@ The SetupCommand parameter must include the needed arguments.
 ======================================================================
 EOF
 
-if [ ! -d ../AWS-Games ]; then
-  echo "setup must run from repository root"
+if [ ! -d ./minecraft ]; then
+  echo "setup must run from repository root (missing minecraft subdirectory)"
   exit 1
 fi
 
@@ -32,6 +32,19 @@ serverFolder=""
 serverVersion=""
 jarUrl=""
 javaPackage=""
+
+# javaPackage annotation:
+# Current (as of January 2026): java-21-amazon-corretto-devel
+#   - Recommended for Minecraft 1.21.x on Amazon Linux 2023.
+#   - Provides full JDK (includes devel tools); harmless overhead in prod, ensures all components available.
+#   - Corretto 21 is LTS with support until ~2030; matches Minecraft's Java 21 requirement.
+#
+# Future:
+#   - Monitor Minecraft releases. The shift to year-based versioning (26.x in 2026) introduces Java 25 requirement
+#     starting with version 26.1 (planned 2026).
+#   - Consider switching to java-25-amazon-corretto-devel in H2 2026 or early 2027, once 26.x is stable and
+#     performance benefits (e.g., improved GC, compact headers) are validated for your workload.
+#   - Corretto 25 packages are available on AL2023; transition will be straightforward via yum.
 
 # Error function to display an error message and exit
 error() {

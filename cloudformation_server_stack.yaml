@@ -19,6 +19,15 @@ Parameters:
     Description: ID of an existing EBS volume to attach. Leave empty to create a new volume.
     Default: ""
 
+  InstanceType:
+    Type: String
+    Default: t4g.medium
+    Description: |
+      EC2 instance type.
+      - Default t4g.medium: Graviton ARM, cost-effective, strong single-thread performance for chunk generation (2 vCPU burstable, 4GB RAM).
+      - Use t4g.large for more RAM (8GB) with many players/mods.
+      - Use m7g.medium (or larger) for sustained higher CPU (non-burstable baseline performance).
+
 Conditions:
   CreateNewVolume: !Equals [ !Ref ExistingVolumeId, "" ]
 
@@ -26,8 +35,8 @@ Resources:
   ServerInstance:
     Type: AWS::EC2::Instance
     Properties:
-      InstanceType: t3.large  # 8GB, 2vcpu, 0.1056 USD/hour
-      ImageId: ami-09c2ae4b214fc8e0e  # Amazon Linux 2023 AMI 64-bit (x86)  /  https://ap-southeast-4.console.aws.amazon.com/ec2/home?region=ap-southeast-4#AMICatalog:
+      InstanceType: !Ref InstanceType
+      ImageId: ami-0f1aff311a97172fb  # Amazon Linux 2023 kernel-6.12 AMI (64-bit ARM)  /  https://ap-southeast-4.console.aws.amazon.com/ec2/home?region=ap-southeast-4#AMICatalog:
       KeyName: tim_ssh_to_game_server  # EC2 / key pairs
       SecurityGroupIds:
         - !Ref ServerSecurityGroup
@@ -59,6 +68,20 @@ Resources:
           git clone https://github.com/TSheahan/AWS-Games.git
           chown -R ec2-user:ec2-user AWS-Games
           cd AWS-Games
+          
+          echo "!! Write game port range to JSON for future scripts"
+          cat <<EOF > /home/ec2-user/game-ports.json
+          {
+            "start": ${ServerPortNumberStart},
+            "end": ${ServerPortNumberEnd}
+          }
+          EOF
+          chown ec2-user:ec2-user /home/ec2-user/game-ports.json
+
+          echo "!! Copy update-release script for ec2-user"
+          cp update-release.sh /home/ec2-user/update-release.sh
+          chown ec2-user:ec2-user /home/ec2-user/update-release.sh
+          chmod +x /home/ec2-user/update-release.sh
           
           echo "!! Execute SetupCommand"
           # as root, invoke the setup command, expecting it to handle system & user setup tasks
