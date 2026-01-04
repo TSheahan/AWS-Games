@@ -90,6 +90,14 @@ if [ -z "$javaPackage" ]; then
     error "java-package argument is required"
 fi
 
+# Verify persistent mount is available before proceeding
+if ! mountpoint -q /mnt/persist; then
+    echo "Error: /mnt/persist is not mounted. Check UserData bootstrap logs (/var/log/cloud-init-output.log)." >&2
+    echo "Persistent storage setup failed — cannot continue." >&2
+    exit 1
+fi
+echo "/mnt/persist is properly mounted."
+
 # If all arguments are provided, proceed with the rest of the script
 echo "Server Folder: $serverFolder"
 echo "Server Version: $serverVersion"

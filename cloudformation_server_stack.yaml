@@ -28,8 +28,19 @@ Parameters:
       - Use t4g.large for more RAM (8GB) with many players/mods.
       - Use m7g.medium (or larger) for sustained higher CPU (non-burstable baseline performance).
 
+  AvailabilityZone:
+    Type: String
+    Default: ""
+    Description: Availability Zone for the instance and new volume. Leave empty for automatic selection. Needed when reusing an existing volume.
+
 Conditions:
-  CreateNewVolume: !Equals [ !Ref ExistingVolumeId, "" ]
+  CreateNewVolume: !Equals
+    - !Ref ExistingVolumeId
+    - ""
+  HasAvailabilityZone: !Not
+    - !Equals
+      - !Ref AvailabilityZone
+      - ""
 
 Resources:
   ServerInstance:
@@ -40,6 +51,13 @@ Resources:
       KeyName: tim_ssh_to_game_server  # EC2 / key pairs
       SecurityGroupIds:
         - !Ref ServerSecurityGroup
+      AvailabilityZone: !If
+        - HasAvailabilityZone
+        - !Ref AvailabilityZone
+        - !Select
+          - 0
+          - !GetAZs
+            Ref: AWS::Region
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -47,26 +65,48 @@ Resources:
           # Australia/Melbourne should be all that anyone will ever need... right?
           timedatectl set-timezone Australia/Melbourne
 
-          echo "!! Check whether the attached volume is formatted.."
-          REAL_DEVICE=$(sudo readlink -f /dev/sdf)
-          echo "/dev/sdf maps to $REAL_DEVICE by symlink check"
-          if [ "$(sudo file -s $REAL_DEVICE | awk '{print $2}')" == "data" ]; then
+          echo "!! Detect secondary EBS volume (non-root disk)"
+          # Find the secondary block device: disk, ~10G (or larger), not mounted, not root (nvme0n1)
+          SECONDARY_DEVICE=$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT -p -n -b | awk '
+            $3 == "disk" && $4 == "" && $1 !~ /nvme0n1/ && int($2/1024/1024/1024) >= 8 {print $1; exit}
+          ')
+
+          if [ -z "$SECONDARY_DEVICE" ]; then
+              echo "Error: Could not detect secondary EBS volume. Available devices:"
+              lsblk
+              exit 1
+          fi
+
+          echo "Detected secondary volume: $SECONDARY_DEVICE"
+
+          # Resolve any symlinks (e.g., /dev/nvme1n1 → itself)
+          REAL_DEVICE=$(readlink -f "$SECONDARY_DEVICE")
+          echo "$SECONDARY_DEVICE maps to $REAL_DEVICE"
+
+          echo "!! Check if the volume is formatted"
+          if [ "$(file -s "$REAL_DEVICE" | awk '{print $2}')" == "data" ]; then
               echo "$REAL_DEVICE is not formatted, formatting as ext4..."
-              sudo mkfs -t ext4 $REAL_DEVICE
+              mkfs -t ext4 "$REAL_DEVICE"
           else
               echo "$REAL_DEVICE is already formatted."
           fi
 
           echo "!! Mount the attached volume to /mnt/persist"
-          sudo mkdir -p /mnt/persist
-          sudo mount $REAL_DEVICE /mnt/persist
-          echo "$REAL_DEVICE /mnt/persist ext4 defaults,nofail 0 2" | sudo tee -a /etc/fstab > /dev/null
+          mkdir -p /mnt/persist
+          mount "$REAL_DEVICE" /mnt/persist
+          if [ $? -ne 0 ]; then
+              echo "Error: Failed to mount $REAL_DEVICE"
+              exit 1
+          fi
+
+          echo "$REAL_DEVICE /mnt/persist ext4 defaults,nofail 0 2" >> /etc/fstab
 
           echo "!! Clone and use AWS-Games"
           yum install -y git
           cd /home/ec2-user
           git clone https://github.com/TSheahan/AWS-Games.git
           chown -R ec2-user:ec2-user AWS-Games
+          chmod +x AWS-Games/setup.sh AWS-Games/update-release.sh  # Ensure executability post-clone
           cd AWS-Games
           
           echo "!! Write game port range to JSON for future scripts"

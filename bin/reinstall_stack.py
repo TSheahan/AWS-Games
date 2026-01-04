@@ -32,6 +32,12 @@ Environment variable support:
   GAME_INSTANCE_TYPE        → --instance-type
 
 Explicit CLI arguments always override environment variables.
+
+Key new feature:
+  When ExistingVolumeId is non-empty (either explicit, reused, or from env),
+  the script automatically detects the volume's Availability Zone using EC2 describe_volumes
+  and passes it as a new CloudFormation parameter AvailabilityZone.
+  This pins the EC2 instance to the correct AZ, preventing attachment failures.
 """
 
 import argparse
@@ -40,18 +46,24 @@ import os
 import sys
 
 import boto3
-from botocore.exceptions import WaiterError
+from botocore.exceptions import ClientError, WaiterError
 
 
 REGION = "ap-southeast-4"
 STACK_PREFIX = "GameStack"
-TEMPLATE_PATH = "cloudformation_server_stack.yaml"
+TEMPLATE_PATH = "../cloudformation_server_stack.yaml"
 
 
 def get_cf_client(profile: str):
     """Create a CloudFormation client using the specified profile."""
     session = boto3.Session(profile_name=profile)
     return session.client("cloudformation", region_name=REGION)
+
+
+def get_ec2_client(profile: str):
+    """Create an EC2 client using the specified profile."""
+    session = boto3.Session(profile_name=profile)
+    return session.client("ec2", region_name=REGION)
 
 
 def find_game_stacks(client):
@@ -70,6 +82,23 @@ def get_stack_parameters(client, stack_name: str) -> dict:
     desc = client.describe_stacks(StackName=stack_name)
     params = desc["Stacks"][0].get("Parameters", [])
     return {p["ParameterKey"]: p["ParameterValue"] for p in params}
+
+
+def get_volume_az(ec2_client, volume_id: str) -> str:
+    """Return the Availability Zone of the given volume ID."""
+    try:
+        response = ec2_client.describe_volumes(VolumeIds=[volume_id])
+        if not response["Volumes"]:
+            print(f"Warning: Volume {volume_id} not found in region {REGION}.")
+            sys.exit(1)
+        az = response["Volumes"][0]["AvailabilityZone"]
+        return az
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "InvalidVolume.NotFound":
+            print(f"Error: Volume {volume_id} does not exist or is not accessible.")
+        else:
+            print(f"Error describing volume {volume_id}: {e}")
+        sys.exit(1)
 
 
 def delete_stack(client, stack_name: str):
@@ -160,10 +189,11 @@ def main():
         else:
             args.port_end = args.port_start
 
-    client = get_cf_client(args.profile)
+    cf_client = get_cf_client(args.profile)
+    ec2_client = get_ec2_client(args.profile)
 
     # Find existing stacks
-    stacks = find_game_stacks(client)
+    stacks = find_game_stacks(cf_client)
 
     old_volume_id = None
     deleted_stack_name = None
@@ -184,11 +214,11 @@ def main():
             sys.exit(0)
 
         # Fetch parameters to possibly reuse ExistingVolumeId
-        params = get_stack_parameters(client, stack["StackName"])
+        params = get_stack_parameters(cf_client, stack["StackName"])
         old_volume_id = params.get("ExistingVolumeId", "")
         deleted_stack_name = stack["StackName"]
 
-        delete_stack(client, deleted_stack_name)
+        delete_stack(cf_client, deleted_stack_name)
 
     # Determine final ExistingVolumeId early, before creation confirmation
     final_volume_id = args.existing_volume_id
@@ -202,15 +232,28 @@ def main():
         print("No existing volume specified — a new EBS volume will be created.")
         final_volume_id = ""
 
-    # Confirm creation, now that user knows volume treatment
+    # Detect AvailabilityZone if we're using an existing volume
+    availability_zone = None
+    if final_volume_id:
+        print(f"Detecting Availability Zone for volume {final_volume_id}...")
+        availability_zone = get_volume_az(ec2_client, final_volume_id)
+        print(f"Volume is in Availability Zone: {availability_zone}")
+    else:
+        print("New volume will be created — Availability Zone will be chosen automatically by AWS.")
+
+    # Confirm creation with full visibility
     print("\nReady to create a new stack.")
     print(f"  Parameters summary:")
     print(f"    ServerPortNumberStart: {args.port_start}")
-    print(f"    ServerPortNumberEnd: {port_end}")
+    print(f"    ServerPortNumberEnd: {args.port_end}")
     print(f"    SetupCommand: {args.setup_command}")
     print(f"    ExistingVolumeId: '{final_volume_id}'")
     print(f"    InstanceType: {args.instance_type}")
-    confirm = input("Proceed with stack creation? Press Enter to continue or Ctrl+C to abort: ")
+    if availability_zone:
+        print(f"    AvailabilityZone: {availability_zone} (pinned to match volume)")
+    else:
+        print(f"    AvailabilityZone: (automatic selection)")
+    confirm = input("\nProceed with stack creation? Press Enter to continue or Ctrl+C to abort: ")
     if confirm != "":
         print("Aborted.")
         sys.exit(0)
@@ -223,6 +266,8 @@ def main():
         {"ParameterKey": "ExistingVolumeId", "ParameterValue": final_volume_id},
         {"ParameterKey": "InstanceType", "ParameterValue": args.instance_type},
     ]
+    if availability_zone:
+        parameters.append({"ParameterKey": "AvailabilityZone", "ParameterValue": availability_zone})
 
     # Read template
     try:
@@ -236,10 +281,10 @@ def main():
     timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     new_stack_name = f"{STACK_PREFIX}-{timestamp}"
 
-    create_stack(client, new_stack_name, template_body, parameters)
+    create_stack(cf_client, new_stack_name, template_body, parameters)
 
     # Display outputs
-    outputs = get_stack_outputs(client, new_stack_name)
+    outputs = get_stack_outputs(cf_client, new_stack_name)
     print("\nStack creation complete. Key outputs:")
     for key, value in outputs.items():
         print(f"  {key}: {value}")
