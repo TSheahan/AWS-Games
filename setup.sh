@@ -108,6 +108,9 @@ echo "!! Install JDK"
 yum update -y
 yum install -y "$javaPackage"
 
+echo "!! Install utility packages"
+yum install -y htop
+
 echo "!! Check Java version"
 java -version
 

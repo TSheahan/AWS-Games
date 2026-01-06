@@ -66,48 +66,26 @@ Resources:
           timedatectl set-timezone Australia/Melbourne
 
           echo "!! Detect and mount persistent volume"
-          # Common NVMe pattern for secondary volume on Nitro
-          EXPECTED_DEVICE="/dev/nvme1n1"
-
-          if [ -n "${ExistingVolumeId}" ] && [ "${ExistingVolumeId}" != "" ]; then
-              echo "Reusing existing volume — waiting for device $EXPECTED_DEVICE to appear (up to 120s)"
-              REAL_DEVICE=""
-              for i in {1..24}; do  # 24 * 5s = 120s timeout
-                  if [ -b "$EXPECTED_DEVICE" ]; then
-                      REAL_DEVICE="$EXPECTED_DEVICE"
-                      echo "Device $REAL_DEVICE detected."
-                      break
-                  fi
-                  echo "Waiting for $EXPECTED_DEVICE... ($i/24)"
-                  sleep 5
-              done
-
-              if [ -z "$REAL_DEVICE" ]; then
-                  echo "Error: Timed out waiting for $EXPECTED_DEVICE. Available devices:"
-                  lsblk
-                  exit 1
+          # Unified detection with wait loop for delayed device appearance (covers both new and reused volumes)
+          REAL_DEVICE=""
+          echo "Waiting for secondary EBS volume to appear (up to 120s)..."
+          for i in {1..24}; do  # 24 * 5s = 120s timeout
+              SECONDARY_DEVICE=$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT -p -n -b | awk '
+                $3 == "disk" && $4 == "" && int($2/1024/1024/1024) >= 8 {print $1; exit}
+              ')
+              if [ -n "$SECONDARY_DEVICE" ]; then
+                  REAL_DEVICE=$(readlink -f "$SECONDARY_DEVICE")
+                  echo "Detected volume: $REAL_DEVICE"
+                  break
               fi
-          else
-              echo "Creating new volume — detecting secondary disk"
-              REAL_DEVICE=""
-              for i in {1..12}; do  # Shorter wait for new volumes
-                  SECONDARY_DEVICE=$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT -p -n -b | awk '
-                    $3 == "disk" && $4 == "" && $1 !~ /nvme0n1/ && int($2/1024/1024/1024) >= 8 {print $1; exit}
-                  ')
-                  if [ -n "$SECONDARY_DEVICE" ]; then
-                      REAL_DEVICE=$(readlink -f "$SECONDARY_DEVICE")
-                      echo "Detected new volume: $REAL_DEVICE"
-                      break
-                  fi
-                  echo "Waiting for secondary disk... ($i/12)"
-                  sleep 5
-              done
+              echo "No secondary volume yet... ($i/24)"
+              sleep 5
+          done
 
-              if [ -z "$REAL_DEVICE" ]; then
-                  echo "Error: Could not detect secondary EBS volume. Available devices:"
-                  lsblk
-                  exit 1
-              fi
+          if [ -z "$REAL_DEVICE" ]; then
+              echo "Error: Timed out waiting for secondary EBS volume. Available devices:"
+              lsblk
+              exit 1
           fi
 
           echo "Using device: $REAL_DEVICE"
@@ -128,7 +106,19 @@ Resources:
               exit 1
           fi
 
-          echo "$REAL_DEVICE /mnt/persist ext4 defaults,nofail 0 2" >> /etc/fstab
+          echo "!! Add UUID-based entry to /etc/fstab for robust mounting across reboots"
+          VOLUME_UUID=$(blkid -s UUID -o value "$REAL_DEVICE")
+          if [ -z "$VOLUME_UUID" ]; then
+              echo "Error: Could not retrieve UUID for $REAL_DEVICE"
+              exit 1
+          fi
+          echo "Volume UUID: $VOLUME_UUID"
+
+          # Remove any existing /mnt/persist entry to avoid duplicates
+          sed -i '/[[:space:]]\/mnt\/persist[[:space:]]/d' /etc/fstab
+
+          # Add new UUID-based entry
+          echo "UUID=$VOLUME_UUID /mnt/persist ext4 defaults,nofail 0 2" >> /etc/fstab
 
           echo "!! Clone and use AWS-Games"
           yum install -y git
