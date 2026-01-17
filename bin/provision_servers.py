@@ -14,10 +14,12 @@ Requires:
 - git installed (from UserData bootstrap)
 
 Usage:
-    python3 provision_servers.py [--update] [--read-only]
+    python3 provision_servers.py [--update] [--read-only] [--provision]
 
     --update      Pull latest config from remote repo before processing
     --read-only   Validate and log without writing files or changing system state
+    --provision   Perform actual provisioning (validation + file/unit generation).
+                  Omit to only update/pull config repo.
 """
 
 import argparse
@@ -28,7 +30,7 @@ import pathlib
 import subprocess
 import sys
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 import yaml
 
@@ -49,11 +51,11 @@ LOG_FILE = "/var/log/minecraft-provision.log"
 EC2_USER = "ec2-user"
 
 # ------------------------------------------------------------------------------
-# Logging setup
+# Logging setup — DEBUG level for detailed visibility during development
 # ------------------------------------------------------------------------------
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.FileHandler(LOG_FILE),
@@ -61,6 +63,19 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Ensure log file is present and readable by non-root users
+log_path = pathlib.Path(LOG_FILE)
+if not log_path.exists():
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.touch(mode=0o644)
+    subprocess.run(["chown", "root:root", str(log_path)], check=False)
+    logger.info("Created log file %s (mode 0644)", LOG_FILE)
+else:
+    current_mode = log_path.stat().st_mode & 0o777
+    if (current_mode & 0o004) == 0:
+        log_path.chmod(current_mode | 0o004)
+        logger.info("Made log file %s world-readable", LOG_FILE)
 
 
 def run_cmd(cmd: List[str], check: bool = True, capture_output: bool = False) -> subprocess.CompletedProcess:
@@ -77,37 +92,25 @@ def run_cmd(cmd: List[str], check: bool = True, capture_output: bool = False) ->
     return result
 
 
-# Ensure log file is present and readable by non-root users
-log_path = pathlib.Path(LOG_FILE)
-if not log_path.exists():
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_path.touch(mode=0o644)
-    run_cmd(["chown", "root:root", str(log_path)], check=False)
-    logger.info("Created log file %s (mode 0644)", LOG_FILE)
-else:
-    current_mode = log_path.stat().st_mode & 0o777
-    if (current_mode & 0o004) == 0:
-        log_path.chmod(current_mode | 0o004)
-        logger.info("Made log file %s world-readable", LOG_FILE)
-
-
 # ------------------------------------------------------------------------------
-# Guarded operations (skipped in --read-only mode)
+# Guarded operations — imperative style (clobber/ensure)
 # ------------------------------------------------------------------------------
 
 def guarded_mkdir(path: pathlib.Path, read_only: bool) -> None:
     if read_only:
-        logger.info("[READ-ONLY] Would create directory %s", path)
+        logger.info("[READ-ONLY] Would ensure directory %s", path)
         return
     path.mkdir(parents=True, exist_ok=True)
     run_cmd(["chown", f"{EC2_USER}:{EC2_USER}", str(path)])
-    logger.info("Created directory %s", path)
+    logger.info("Ensured directory exists: %s", path)
 
 
 def guarded_write_text(path: pathlib.Path, content: str, mode: int = 0o644, read_only: bool = False) -> None:
     if read_only:
         logger.info("[READ-ONLY] Would write to %s", path)
+        logger.debug("Content that would be written:\n%s", content)
         return
+    logger.debug("Writing content to %s:\n%s", path, content)
     path.write_text(content)
     path.chmod(mode)
     logger.info("Wrote file %s", path)
@@ -145,13 +148,28 @@ def ensure_config_repo(read_only: bool) -> None:
         config_dir.parent.mkdir(parents=True, exist_ok=True)
         run_cmd(["git", "clone", CONFIG_REPO_URL, str(config_dir)])
     else:
+        if read_only:
+            logger.info("[READ-ONLY] Would git pull in %s", config_dir)
+            return
         logger.info("Updating config repo at %s", config_dir)
         run_cmd(["git", "-C", str(config_dir), "pull"])
 
 
-def load_config() -> Dict[str, Any]:
+def load_config(provision: bool) -> Optional[Dict[str, Any]]:
+    """
+    Load the YAML config if it exists.
+    Returns None if file is missing and --provision is NOT requested.
+    Raises exception if file is missing AND --provision is requested.
+    """
     if not os.path.isfile(CONFIG_PATH):
-        raise FileNotFoundError(f"Config file not found: {CONFIG_PATH}")
+        if provision:
+            raise FileNotFoundError(
+                f"Config file not found: {CONFIG_PATH}. "
+                "Cannot provision without config. Run with --update first."
+            )
+        logger.info("No config file found at %s — skipping provisioning (use --update to fetch)", CONFIG_PATH)
+        return None
+
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
@@ -407,6 +425,9 @@ def main() -> int:
     parser.add_argument("--update", action="store_true", help="Pull latest config from repo first")
     parser.add_argument("--read-only", action="store_true",
                         help="Validate and log without writing files or changing system state")
+    parser.add_argument("--provision", action="store_true",
+                        help="Perform actual provisioning (validation + file/unit generation). "
+                             "Omit to only update/pull config repo.")
     args = parser.parse_args()
 
     # Fail fast if not root
@@ -417,17 +438,33 @@ def main() -> int:
     logger.info("Running as root (uid=%d) - proceeding", os.geteuid())
 
     try:
-        # Early mount check for persistent volume
+        # Early mount check — always performed
         if not pathlib.Path(PERSIST_ROOT).is_mount():
             logger.error("Persistent volume does not appear to be mounted at %s", PERSIST_ROOT)
             logger.error("Check 'mount | grep persist' — cannot proceed safely.")
             return 1
         logger.debug("Persistent volume is mounted at %s", PERSIST_ROOT)
 
+        # Handle repo update/clone
         if args.update:
             ensure_config_repo(args.read_only)
 
-        config = load_config()
+        # Load config — only attempt if we intend to provision or validate
+        config = None
+        if args.provision or args.read_only:
+            config = load_config(args.provision)
+
+        # Skip provisioning entirely if --provision not given
+        if not args.provision:
+            logger.info("Provisioning skipped (--provision not specified)")
+            if args.update:
+                logger.info("Config repo update complete.")
+            return 0
+
+        # From here: provisioning is requested → config must exist
+        if config is None:
+            raise RuntimeError("Config is None but --provision was requested — logic error")
+
         port_min, port_max = load_port_range()
 
         provisioned = set(config["provisioned"])
