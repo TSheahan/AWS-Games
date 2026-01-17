@@ -1,3 +1,3 @@
 boto3>=1.34.0
-
+pyyaml
 botocore~=1.42.21
