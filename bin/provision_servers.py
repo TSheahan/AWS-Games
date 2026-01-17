@@ -17,8 +17,7 @@ Usage:
     python3 provision_servers.py [--update] [--read-only]
 
     --update      Pull latest config from remote repo before processing
-    --read-only   Validate config, check state, log actions — but do not
-                  write files, change permissions, or run systemctl commands
+    --read-only   Validate and log without writing files or changing system state
 """
 
 import argparse
@@ -42,7 +41,8 @@ CONFIG_LOCAL_DIR = "/home/ec2-user/minecraft-config"
 CONFIG_FILE_NAME = "minecraft-servers.yaml"
 CONFIG_PATH = os.path.join(CONFIG_LOCAL_DIR, CONFIG_FILE_NAME)
 
-PERSIST_ROOT = "/mnt/persist/minecraft"
+PERSIST_ROOT = "/mnt/persist"
+MINECRAFT_ROOT = os.path.join(PERSIST_ROOT, "minecraft")
 PORTS_JSON_PATH = "/home/ec2-user/game-ports.json"
 LOG_FILE = "/var/log/minecraft-provision.log"
 
@@ -75,6 +75,20 @@ def run_cmd(cmd: List[str], check: bool = True, capture_output: bool = False) ->
     if capture_output and result.stdout:
         logger.debug("Command output: %s", result.stdout.strip())
     return result
+
+
+# Ensure log file is present and readable by non-root users
+log_path = pathlib.Path(LOG_FILE)
+if not log_path.exists():
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.touch(mode=0o644)
+    run_cmd(["chown", "root:root", str(log_path)], check=False)
+    logger.info("Created log file %s (mode 0644)", LOG_FILE)
+else:
+    current_mode = log_path.stat().st_mode & 0o777
+    if (current_mode & 0o004) == 0:
+        log_path.chmod(current_mode | 0o004)
+        logger.info("Made log file %s world-readable", LOG_FILE)
 
 
 # ------------------------------------------------------------------------------
@@ -328,9 +342,9 @@ After=network.target
 
 [Service]
 User={EC2_USER}
-WorkingDirectory={PERSIST_ROOT}/{folder}
-ExecStart={PERSIST_ROOT}/{folder}/start-minecraft.sh
-ExecStop={PERSIST_ROOT}/{folder}/stop-minecraft.sh
+WorkingDirectory={MINECRAFT_ROOT}/{folder}
+ExecStart={MINECRAFT_ROOT}/{folder}/start-minecraft.sh
+ExecStop={MINECRAFT_ROOT}/{folder}/stop-minecraft.sh
 TimeoutStopSec=90
 KillSignal=SIGTERM
 KillMode=process
@@ -371,7 +385,7 @@ def provision_server(server_id: str, data: Dict[str, Any], read_only: bool) -> N
     port = data["port"]
     start_cmd = data["start_command"]
 
-    folder_path = pathlib.Path(PERSIST_ROOT) / folder_name
+    folder_path = pathlib.Path(MINECRAFT_ROOT) / folder_name
 
     if read_only:
         logger.info("[READ-ONLY] Would provision server %s in %s (port %d)", server_id, folder_path, port)
@@ -395,15 +409,20 @@ def main() -> int:
                         help="Validate and log without writing files or changing system state")
     args = parser.parse_args()
 
+    # Fail fast if not root
     if os.geteuid() != 0:
-        logger.error("This script must be run as root")
+        logger.error("This script must run as root (required for systemd unit management, file ownership, etc.)")
+        logger.error("Try: sudo python3 provision_servers.py [options]")
         return 1
+    logger.info("Running as root (uid=%d) - proceeding", os.geteuid())
 
     try:
-        # Early mount check (always performed)
+        # Early mount check for persistent volume
         if not pathlib.Path(PERSIST_ROOT).is_mount():
-            logger.error("/mnt/persist is not mounted — cannot proceed")
+            logger.error("Persistent volume does not appear to be mounted at %s", PERSIST_ROOT)
+            logger.error("Check 'mount | grep persist' — cannot proceed safely.")
             return 1
+        logger.debug("Persistent volume is mounted at %s", PERSIST_ROOT)
 
         if args.update:
             ensure_config_repo(args.read_only)
