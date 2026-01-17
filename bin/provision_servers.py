@@ -490,15 +490,39 @@ def main() -> int:
 
             provision_server(server_id, data, args.read_only)
 
-        if not args.read_only:
-            cleanup_stale_services(provisioned, args.read_only)
-            guarded_systemctl(["daemon-reload"], args.read_only)
+        # Provisioning loop complete — now finalize systemd state
+        cleanup_stale_services(provisioned, args.read_only)
+        guarded_systemctl(["daemon-reload"], args.read_only)
+
+        # Enforce desired boot state for all provisioned servers
+        for server_id in provisioned:
+            if server_id not in config["servers"]:
+                continue  # already warned earlier
+
+            data = config["servers"][server_id]
+            service_name = f"minecraft-{server_id}.service"
+            want_enabled = data.get("start_on_boot", False)
+
+            if want_enabled:
+                if args.read_only:
+                    logger.info("[READ-ONLY] Would enable service %s (start_on_boot=true)", service_name)
+                else:
+                    logger.info("Enabling service %s (start_on_boot=true)", service_name)
+                    run_cmd(["systemctl", "enable", service_name], check=False)
+            else:
+                if args.read_only:
+                    logger.info("[READ-ONLY] Would disable service %s (start_on_boot=false)", service_name)
+                else:
+                    logger.info("Disabling service %s (start_on_boot=false)", service_name)
+                    run_cmd(["systemctl", "disable", service_name], check=False)
+                    # Note: we do NOT do --now here to avoid unexpectedly stopping a running server.
+                    # If you want to force stop when changing from true→false, add:
+                    # run_cmd(["systemctl", "stop", service_name], check=False)
 
         logger.info("Provisioning run complete.")
         return 0
-
-    except Exception:
-        logger.exception("Fatal error during provisioning")
+    except Exception as e:
+        logger.exception("Fatal error during provisioning", exc_info=e)
         return 1
 
 
