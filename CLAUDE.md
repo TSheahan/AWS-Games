@@ -34,7 +34,7 @@ Developer workstation
 | `PersistentVolumeAttachment` | Volume Attachment | Attached at `/dev/sdf`, mounted at `/mnt/persist` |
 | `ServerSecurityGroup` | Security Group | SSH (22) + configurable game port range |
 
-**Key AMI:** `ami-0f1aff311a97172fb` (AL2023 ARM64, ap-southeast-4)
+**AMI:** Resolved dynamically at deploy time via SSM — `{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.12-arm64}}` (AL2023 kernel-6.12 ARM64, EoL June 2029)
 **Key Pair:** `tim_ssh_to_game_server` (must exist in region before deploy)
 **Region:** `ap-southeast-4` (Melbourne, Australia) — hard-coded throughout
 

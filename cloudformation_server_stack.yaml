@@ -47,7 +47,7 @@ Resources:
     Type: AWS::EC2::Instance
     Properties:
       InstanceType: !Ref InstanceType
-      ImageId: ami-0f1aff311a97172fb  # Amazon Linux 2023 kernel-6.12 AMI (64-bit ARM)  /  https://ap-southeast-4.console.aws.amazon.com/ec2/home?region=ap-southeast-4#AMICatalog:
+      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.12-arm64}}'  # AL2023 ARM64, kernel-6.12 LTS. Resolved dynamically at deploy time — no manual AMI maintenance. AL2023 EoL June 2029.
       KeyName: tim_ssh_to_game_server  # EC2 / key pairs
       SecurityGroupIds:
         - !Ref ServerSecurityGroup
