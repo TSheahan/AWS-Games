@@ -11,7 +11,7 @@ The system is self-bootstrapping: the CloudFormation stack it deploys causes the
 Running one command on the developer workstation:
 
 ```bash
-python bin/reinstall_stack.py --setup-command "./setup.sh ..."
+python bin/reinstall_stack.py --setup-command "./ec2/minecraft/setup.sh ..."
 ```
 
 ...triggers a fully automated sequence:
@@ -41,13 +41,11 @@ Developer workstation
                   └── Executes SetupCommand parameter (e.g. ./ec2/minecraft/setup.sh ...)
                         └── ec2/minecraft/setup.sh
                               ├── Installs Java (Amazon Corretto via yum)
-                              ├── Downloads server JAR, creates symlink
-                              ├── Copies start/stop wrapper scripts
-                              └── Creates and enables minecraft-server.service
-                                    └── (optional) ec2/minecraft/provision_servers.py
-                                          ├── Clones AWS-Games-Config repo
-                                          ├── Reads minecraft-servers.yaml
-                                          └── Generates per-server systemd units
+                              ├── Downloads server JAR to /mnt/persist/minecraft/
+                              └── ec2/minecraft/provision_servers.py
+                                    ├── Clones AWS-Games-Config repo
+                                    ├── Reads minecraft-servers.yaml
+                                    └── Generates per-server systemd units, start/stop scripts, server.properties
 ```
 
 ---
@@ -91,10 +89,7 @@ Developer workflow tool. Handles the full stack lifecycle: discovery, safe delet
 Multi-server provisioning system. Runs on the EC2 instance as root. Reads a YAML configuration from a separate repository and generates per-server systemd service units, start/stop scripts, and `server.properties` files. Supports `--read-only` validation and separate `--update`/`--provision` phases.
 
 ### `ec2/minecraft/setup.sh`
-First-boot server provisioner. Validates preconditions (persistent mount, required args), installs the JDK, downloads the server JAR, and registers the initial systemd service. Invoked via the `SetupCommand` CloudFormation parameter from UserData.
-
-### `ec2/minecraft/start-minecraft.sh` and `stop-minecraft.sh`
-systemd service wrappers. `start-minecraft.sh` validates EULA acceptance and server config before launching the JVM in a detached screen session with dated console logging. `stop-minecraft.sh` sends an in-game warning then `/stop`, giving players notice before the process exits.
+Instance-level first-boot provisioner. Validates preconditions (persistent mount, required args), installs the JDK, downloads the server JAR to the persistent volume (skipped if already present), then invokes `provision_servers.py` for all server-specific setup. Invoked via the `SetupCommand` CloudFormation parameter from UserData.
 
 ### `ec2/minecraft/mcstatus.sh`
 Quick operational status display. Lists all `minecraft-*.service` units with coloured status indicators (running / stopped / failed).
@@ -113,7 +108,7 @@ pip install -r requirements.txt
 python bin/reinstall_stack.py \
   --port-start 25565 \
   --port-end 25565 \
-  --setup-command "./ec2/minecraft/setup.sh --server-folder=vanilla --server-version=1.21 \
+  --setup-command "./ec2/minecraft/setup.sh --server-version=1.21 \
     --jar-url=https://example.com/server.jar \
     --java-package=java-21-amazon-corretto-devel" \
   --instance-type t4g.medium
@@ -154,11 +149,9 @@ bin/
 ec2/
   update-release.sh                AL2023 release upgrade helper (ec2-user)
   minecraft/
-    setup.sh                       First-boot provisioner (invoked by UserData)
-    provision_servers.py           Multi-server systemd provisioner (EC2, root)
+    setup.sh                       Instance-level first-boot provisioner (invoked by UserData)
+    provision_servers.py           Server provisioner: systemd units, start/stop scripts, server.properties (EC2, root)
     mcstatus.sh                    Server status display (EC2)
-    start-minecraft.sh             JVM launch wrapper (installed to server folder by setup.sh)
-    stop-minecraft.sh              Graceful shutdown wrapper (installed to server folder by setup.sh)
 ```
 
 ---

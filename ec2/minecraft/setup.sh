@@ -2,22 +2,23 @@
 
 cat <<'EOF'
 ======================================================================
-This script sets up a Minecraft server with the following configurations:
-- Server Folder: The directory where the server files are stored.
-- Server Version: The version of the Minecraft server to be deployed.
-  - used to compose jar filename upon download
-- JAR URL: The URL from which the Minecraft server JAR file is downloaded.
-- Java Package: the package to install for java on the server
+This script performs instance-level setup for a Minecraft server host:
+- Java Package: the package to install for Java on the server
+- Server Version: used to name the downloaded server JAR on disk
+- JAR URL: the URL from which the Minecraft server JAR file is downloaded
+  (best-effort; skipped if the file already exists on the persistent volume)
 
 Usage:
-./ec2/minecraft/setup.sh --server-folder=<path> --server-version=<version> --jar-url=<url> --java-package=<package>
+./ec2/minecraft/setup.sh --server-version=<version> --jar-url=<url> --java-package=<package>
 
 The script is designed to be invoked as root via the UserData script of a
 linux game server instance (defined in a CloudFormation template).
 
 It expects to be executed from the repository root folder.
 
-The SetupCommand parameter must include the needed arguments.
+Server-specific provisioning (folders, systemd units, start/stop scripts,
+server.properties) is delegated to provision_servers.py, which this script
+invokes after completing instance-level setup.
 
 ======================================================================
 EOF
@@ -28,7 +29,6 @@ if [ ! -d ./ec2/minecraft ]; then
 fi
 
 # Initialize variables to hold the values of the arguments
-serverFolder=""
 serverVersion=""
 jarUrl=""
 javaPackage=""
@@ -49,7 +49,7 @@ javaPackage=""
 # Error function to display an error message and exit
 error() {
   echo "Error: $1" >&2
-  echo "Usage: $0 --server-folder=<path> --server-version=<version> --jar-url=<url> --java-package=<package>" >&2
+  echo "Usage: $0 --server-version=<version> --jar-url=<url> --java-package=<package>" >&2
   exit 1
 }
 
@@ -57,9 +57,6 @@ error() {
 for arg in "$@"
 do
     case $arg in
-        --server-folder=*)
-        serverFolder="${arg#*=}"
-        ;;
         --server-version=*)
         serverVersion="${arg#*=}"
         ;;
@@ -77,9 +74,6 @@ do
 done
 
 # Check if any of the required arguments are missing
-if [ -z "$serverFolder" ]; then
-    error "server-folder argument is required"
-fi
 if [ -z "$serverVersion" ]; then
     error "server-version argument is required"
 fi
@@ -98,8 +92,6 @@ if ! mountpoint -q /mnt/persist; then
 fi
 echo "/mnt/persist is properly mounted."
 
-# If all arguments are provided, proceed with the rest of the script
-echo "Server Folder: $serverFolder"
 echo "Server Version: $serverVersion"
 echo "JAR URL: $jarUrl"
 echo "Java package: $javaPackage"
@@ -118,55 +110,17 @@ echo "!! Ensure /mnt/persist/minecraft exists and is owned by ec2-user"
 mkdir -p /mnt/persist/minecraft
 chown ec2-user:ec2-user /mnt/persist/minecraft
 
-echo "!! Ensure the server folder exists and is owned by ec2-user"
-mkdir -p "/mnt/persist/minecraft/${serverFolder}"
-chown ec2-user:ec2-user "/mnt/persist/minecraft/${serverFolder}"
+jarPath="/mnt/persist/minecraft/server_${serverVersion}.jar"
+echo "!! Download Minecraft server JAR to $jarPath (skipped if already present)"
+if [ -f "$jarPath" ]; then
+    echo "JAR already exists at $jarPath — skipping download."
+else
+    wget -O "$jarPath" "$jarUrl" || { echo "Error: JAR download failed." >&2; rm -f "$jarPath"; exit 1; }
+fi
+chown ec2-user:ec2-user "$jarPath"
 
-echo "!! Write /etc/systemd/system/minecraft-server.service"
-cat << EOF > /etc/systemd/system/minecraft-server.service
-[Unit]
-Description=Minecraft Server
-After=network.target
-
-[Service]
-User=ec2-user
-WorkingDirectory=/mnt/persist/minecraft/${serverFolder}
-ExecStart=/mnt/persist/minecraft/${serverFolder}/start-minecraft.sh
-ExecStop=/mnt/persist/minecraft/${serverFolder}/stop-minecraft.sh
-TimeoutStopSec=60
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-startScriptPath="/mnt/persist/minecraft/${serverFolder}/start-minecraft.sh"
-echo "!! Install the start-minecraft.sh wrapper script at $startScriptPath"
-cp ec2/minecraft/start-minecraft.sh "$startScriptPath"
-# Make the script executable
-chmod +x "$startScriptPath"
-# Ensure the script is owned by ec2-user
-chown ec2-user:ec2-user "$startScriptPath"
-
-stopScriptPath="/mnt/persist/minecraft/${serverFolder}/stop-minecraft.sh"
-echo "!! Install the stop-minecraft.sh wrapper script at $stopScriptPath"
-cp ec2/minecraft/stop-minecraft.sh "$stopScriptPath"
-# Make the script executable
-chmod +x "$stopScriptPath"
-# Ensure the script is owned by ec2-user
-chown ec2-user:ec2-user "$stopScriptPath"
-
-jarPath="/home/ec2-user/minecraft_server_${serverVersion}.jar"
-echo "!! Download Minecraft server JAR to $jarPath"
-sudo -u ec2-user wget -O "$jarPath" "$jarUrl"
-
-symlinkPath="/mnt/persist/minecraft/${serverFolder}/minecraft_server.jar"
-echo "!! Symlink the jar to $symlinkPath"
-sudo -u ec2-user ln -s "$jarPath" "$symlinkPath"
-
-echo "!! reload systemd"
-# Reload systemd to recognize the new service and enable it to start on boot
-systemctl daemon-reload
-systemctl enable minecraft-server.service
+echo "!! Provision servers via provision_servers.py"
+python3 ec2/minecraft/provision_servers.py --update --provision
 
 # echo "!! start minecraft-server"
 # systemctl start minecraft-server.service
