@@ -31,7 +31,7 @@ Parameters:
   AvailabilityZone:
     Type: String
     Default: ""
-    Description: Availability Zone for the instance and new volume. Leave empty for automatic selection. Needed when reusing an existing volume.
+    Description: Availability Zone for the instance and new volume. Leave empty for automatic selection of first AZ. Needed when reusing an existing volume.
 
 Conditions:
   CreateNewVolume: !Equals
@@ -59,94 +59,128 @@ Resources:
           - !GetAZs
             Ref: AWS::Region
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          
-          # Australia/Melbourne should be all that anyone will ever need... right?
-          timedatectl set-timezone Australia/Melbourne
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
 
-          echo "!! Detect and mount persistent volume"
-          # Unified detection with wait loop for delayed device appearance (covers both new and reused volumes)
-          REAL_DEVICE=""
-          echo "Waiting for secondary EBS volume to appear (up to 120s)..."
-          for i in {1..24}; do  # 24 * 5s = 120s timeout
-              SECONDARY_DEVICE=$(lsblk -o NAME,SIZE,TYPE,MOUNTPOINT -p -n -b | awk '
-                $3 == "disk" && $4 == "" && int($2/1024/1024/1024) >= 8 {print $1; exit}
-              ')
-              if [ -n "$SECONDARY_DEVICE" ]; then
-                  REAL_DEVICE=$(readlink -f "$SECONDARY_DEVICE")
-                  echo "Detected volume: $REAL_DEVICE"
-                  break
-              fi
-              echo "No secondary volume yet... ($i/24)"
-              sleep 5
-          done
+            # Australia/Melbourne should be all that anyone will ever need... right?
+            timedatectl set-timezone Australia/Melbourne
 
-          if [ -z "$REAL_DEVICE" ]; then
-              echo "Error: Timed out waiting for secondary EBS volume. Available devices:"
-              lsblk
-              exit 1
-          fi
+            echo "!! Detect and mount persistent volume"
+            # Identify target volume by EBS volume ID encoded in the NVMe serial number.
+            # TARGET_VOLUME is injected by CloudFormation at deploy time, eliminating heuristic
+            # device selection. NVMe serials drop hyphens: vol-0abc123 becomes vol0abc123.
+            TARGET_VOLUME="${TargetVolumeId}"
+            echo "Target volume ID: $TARGET_VOLUME"
 
-          echo "Using device: $REAL_DEVICE"
+            REAL_DEVICE=""
+            echo "Waiting for EBS volume $TARGET_VOLUME to appear (up to 120s)..."
+            for i in {1..24}; do  # 24 * 5s = 120s timeout
+                # awk BEGIN strips hyphen from vol variable before line matching
+                REAL_DEVICE=$(lsblk -d -n -o NAME,SERIAL | awk -v vol="$TARGET_VOLUME" '
+                  BEGIN { gsub(/-/, "", vol) }
+                  $2 == vol { print "/dev/" $1 }
+                ')
+                if [ -n "$REAL_DEVICE" ]; then
+                    echo "Detected target volume at $REAL_DEVICE"
+                    break
+                fi
+                echo "Volume not yet visible... ($i/24). Current devices:"
+                lsblk -d -n -o NAME,SERIAL,SIZE
+                sleep 5
+            done
 
-          echo "!! Check if the volume needs formatting"
-          if [ "$(file -s "$REAL_DEVICE" | awk '{print $2}')" == "data" ]; then
-              echo "$REAL_DEVICE is not formatted, formatting as ext4..."
-              mkfs -t ext4 "$REAL_DEVICE"
-          else
-              echo "$REAL_DEVICE is already formatted."
-          fi
+            # Simplification candidate: remove this fallback if serial match (above) proves reliable across deploys
+            if [ -z "$REAL_DEVICE" ]; then
+                echo "WARNING: Serial-based volume detection timed out for $TARGET_VOLUME."
+                echo "WARNING: Engaging root-exclusion fallback — device identity is less certain. Check serial match output above."
+                echo "Device state at fallback entry:"
+                lsblk -d -n -o NAME,SERIAL,SIZE
 
-          echo "!! Mount the volume to /mnt/persist"
-          mkdir -p /mnt/persist
-          mount "$REAL_DEVICE" /mnt/persist
-          if [ $? -ne 0 ]; then
-              echo "Error: Failed to mount $REAL_DEVICE"
-              exit 1
-          fi
+                # Identify the root disk by resolving the parent device of the / mountpoint.
+                # findmnt gives the partition (/dev/nvme0n1p1); lsblk PKNAME strips the partition
+                # suffix to yield the disk name (nvme0n1).
+                ROOT_DISK=$(lsblk -n -o PKNAME "$(findmnt -n -o SOURCE /)")
+                if [ -z "$ROOT_DISK" ]; then
+                    echo "Error: Could not identify root disk for exclusion. Cannot safely select data volume."
+                    echo "Diagnostic — findmnt / output:"
+                    findmnt -n -o SOURCE /
+                    echo "Diagnostic — full lsblk:"
+                    lsblk
+                    exit 1
+                fi
+                echo "Root disk identified as: /dev/$ROOT_DISK (excluded from candidate set)"
 
-          echo "!! Add UUID-based entry to /etc/fstab for robust mounting across reboots"
-          VOLUME_UUID=$(blkid -s UUID -o value "$REAL_DEVICE")
-          if [ -z "$VOLUME_UUID" ]; then
-              echo "Error: Could not retrieve UUID for $REAL_DEVICE"
-              exit 1
-          fi
-          echo "Volume UUID: $VOLUME_UUID"
+                # Select the first disk that is not the root disk
+                REAL_DEVICE=$(lsblk -d -n -o NAME,TYPE | awk -v root="$ROOT_DISK" '$2 == "disk" && $1 != root { print "/dev/" $1 }' | head -1)
+                if [ -z "$REAL_DEVICE" ]; then
+                    echo "Error: Fallback also failed — no non-root disk found."
+                    echo "Diagnostic — full lsblk:"
+                    lsblk
+                    exit 1
+                fi
+                echo "WARNING: Fallback selected: $REAL_DEVICE (serial match was inconclusive — verify this is the correct volume)"
+            fi
 
-          # Remove any existing /mnt/persist entry to avoid duplicates
-          sed -i '/[[:space:]]\/mnt\/persist[[:space:]]/d' /etc/fstab
+            echo "Using device: $REAL_DEVICE"
 
-          # Add new UUID-based entry
-          echo "UUID=$VOLUME_UUID /mnt/persist ext4 defaults,nofail 0 2" >> /etc/fstab
+            echo "!! Check if the volume needs formatting"
+            if [ "$(file -s "$REAL_DEVICE" | awk '{print $2}')" == "data" ]; then
+                echo "$REAL_DEVICE is not formatted, formatting as ext4..."
+                mkfs -t ext4 "$REAL_DEVICE"
+            else
+                echo "$REAL_DEVICE is already formatted."
+            fi
 
-          echo "!! Clone and use AWS-Games"
-          yum install -y git
-          cd /home/ec2-user
-          git clone https://github.com/TSheahan/AWS-Games.git
-          chown -R ec2-user:ec2-user AWS-Games
-          chmod +x AWS-Games/ec2/minecraft/setup.sh AWS-Games/ec2/update-release.sh  # Ensure executability post-clone
-          cd AWS-Games
-          
-          echo "!! Write game port range to JSON for future scripts"
-          cat <<EOF > /home/ec2-user/game-ports.json
-          {
-            "start": ${ServerPortNumberStart},
-            "end": ${ServerPortNumberEnd}
-          }
-          EOF
-          chown ec2-user:ec2-user /home/ec2-user/game-ports.json
+            echo "!! Mount the volume to /mnt/persist"
+            mkdir -p /mnt/persist
+            mount "$REAL_DEVICE" /mnt/persist
+            if [ $? -ne 0 ]; then
+                echo "Error: Failed to mount $REAL_DEVICE"
+                exit 1
+            fi
 
-          echo "!! Copy update-release script for ec2-user"
-          cp ec2/update-release.sh /home/ec2-user/update-release.sh
-          chown ec2-user:ec2-user /home/ec2-user/update-release.sh
-          chmod +x /home/ec2-user/update-release.sh
-          
-          echo "!! Execute SetupCommand"
-          # as root, invoke the setup command, expecting it to handle system & user setup tasks
-          # use due caution for code execution capability
-          ${SetupCommand}
-          
+            echo "!! Add UUID-based entry to /etc/fstab for robust mounting across reboots"
+            VOLUME_UUID=$(blkid -s UUID -o value "$REAL_DEVICE")
+            if [ -z "$VOLUME_UUID" ]; then
+                echo "Error: Could not retrieve UUID for $REAL_DEVICE"
+                exit 1
+            fi
+            echo "Volume UUID: $VOLUME_UUID"
+
+            # Remove any existing /mnt/persist entry to avoid duplicates
+            sed -i '/[[:space:]]\/mnt\/persist[[:space:]]/d' /etc/fstab
+
+            # Add new UUID-based entry
+            echo "UUID=$VOLUME_UUID /mnt/persist ext4 defaults,nofail 0 2" >> /etc/fstab
+
+            echo "!! Clone and use AWS-Games"
+            yum install -q -y git
+            cd /home/ec2-user
+            git clone https://github.com/TSheahan/AWS-Games.git
+            chown -R ec2-user:ec2-user AWS-Games
+            chmod +x AWS-Games/ec2/minecraft/setup.sh AWS-Games/ec2/update-release.sh  # Ensure executability post-clone
+            cd AWS-Games
+
+            echo "!! Write game port range to JSON for future scripts"
+            cat <<EOF > /home/ec2-user/game-ports.json
+            {
+              "start": ${ServerPortNumberStart},
+              "end": ${ServerPortNumberEnd}
+            }
+            EOF
+            chown ec2-user:ec2-user /home/ec2-user/game-ports.json
+
+            echo "!! Copy update-release script for ec2-user"
+            cp ec2/update-release.sh /home/ec2-user/update-release.sh
+            chown ec2-user:ec2-user /home/ec2-user/update-release.sh
+            chmod +x /home/ec2-user/update-release.sh
+
+            echo "!! Execute SetupCommand"
+            # as root, invoke the setup command, expecting it to handle system & user setup tasks
+            # use due caution for code execution capability
+            ${SetupCommand}
+          - TargetVolumeId: !If [CreateNewVolume, !Ref NewVolume, !Ref ExistingVolumeId]
 
   NewVolume:
     Type: AWS::EC2::Volume
@@ -154,7 +188,13 @@ Resources:
     Properties:
       Size: 10  # Adjust as needed for world files - 1.13GB after 1 months minecraft play
       VolumeType: gp3
-      AvailabilityZone: !GetAtt ServerInstance.AvailabilityZone
+      AvailabilityZone: !If  # duplicated AZ choice - reading it from instance would create a dependency loop.
+        - HasAvailabilityZone
+        - !Ref AvailabilityZone
+        - !Select
+          - 0
+          - !GetAZs
+            Ref: AWS::Region
       Tags:
         - Key: "Purpose"
           Value: "GameServerPersistentFiles"

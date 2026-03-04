@@ -97,11 +97,11 @@ echo "JAR URL: $jarUrl"
 echo "Java package: $javaPackage"
 
 echo "!! Install JDK"
-yum update -y
-yum install -y "$javaPackage"
+yum update -q -y
+yum install -q -y "$javaPackage"
 
 echo "!! Install utility packages"
-yum install -y htop
+yum install -q -y htop
 
 echo "!! Check Java version"
 java -version
@@ -115,7 +115,7 @@ echo "!! Download Minecraft server JAR to $jarPath (skipped if already present)"
 if [ -f "$jarPath" ]; then
     echo "JAR already exists at $jarPath — skipping download."
 else
-    wget -O "$jarPath" "$jarUrl" || { echo "Error: JAR download failed." >&2; rm -f "$jarPath"; exit 1; }
+    wget -q -O "$jarPath" "$jarUrl" || { echo "Error: JAR download failed." >&2; rm -f "$jarPath"; exit 1; }
 fi
 chown ec2-user:ec2-user "$jarPath"
 

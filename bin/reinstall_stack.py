@@ -57,6 +57,7 @@ import argparse
 import datetime
 import logging
 import os
+import random
 import sys
 
 import boto3
@@ -104,6 +105,22 @@ def get_stack_parameters(client, stack_name: str) -> dict:
     desc = client.describe_stacks(StackName=stack_name)
     params = desc["Stacks"][0].get("Parameters", [])
     return {p["ParameterKey"]: p["ParameterValue"] for p in params}
+
+
+def get_random_az(ec2_client) -> str:
+    """Return a randomly selected available Availability Zone in the region."""
+    try:
+        response = ec2_client.describe_availability_zones(
+            Filters=[{"Name": "state", "Values": ["available"]}]
+        )
+    except ClientError as e:
+        logger.error("Error describing Availability Zones: %s", e)
+        sys.exit(1)
+    azs = [az["ZoneName"] for az in response["AvailabilityZones"]]
+    if not azs:
+        logger.error("No available Availability Zones found in region %s.", REGION)
+        sys.exit(1)
+    return random.choice(azs)
 
 
 def get_volume_az(ec2_client, volume_id: str) -> str:
@@ -277,25 +294,24 @@ def main():
         logger.info("No existing volume specified — a new EBS volume will be created.")
         final_volume_id = ""
 
-    # Detect AvailabilityZone if we're using an existing volume
-    availability_zone = None
+    # Always resolve AvailabilityZone explicitly — guarantees both ServerInstance and NewVolume
+    # land in the same AZ. For an existing volume the AZ is pinned to the volume's location;
+    # for a new volume a random AZ is selected to distribute deployments across the region.
     if final_volume_id:
         logger.info("Detecting Availability Zone for volume %s...", final_volume_id)
         availability_zone = get_volume_az(ec2_client, final_volume_id)
         logger.info("Volume is in Availability Zone: %s", availability_zone)
     else:
-        logger.info("New volume will be created — Availability Zone will be chosen automatically by AWS.")
+        availability_zone = get_random_az(ec2_client)
+        logger.info("New volume — randomly selected Availability Zone: %s", availability_zone)
 
     # Build parameters list and stack name before the summary so dry-run has the full picture
-    parameters = [
-        {"ParameterKey": "ServerPortNumberStart", "ParameterValue": str(args.port_start)},
-        {"ParameterKey": "ServerPortNumberEnd", "ParameterValue": str(args.port_end)},
-        {"ParameterKey": "SetupCommand", "ParameterValue": args.setup_command},
-        {"ParameterKey": "ExistingVolumeId", "ParameterValue": final_volume_id},
-        {"ParameterKey": "InstanceType", "ParameterValue": args.instance_type},
-    ]
-    if availability_zone:
-        parameters.append({"ParameterKey": "AvailabilityZone", "ParameterValue": availability_zone})
+    parameters = [{"ParameterKey": "ServerPortNumberStart", "ParameterValue": str(args.port_start)},
+                  {"ParameterKey": "ServerPortNumberEnd", "ParameterValue": str(args.port_end)},
+                  {"ParameterKey": "SetupCommand", "ParameterValue": args.setup_command},
+                  {"ParameterKey": "ExistingVolumeId", "ParameterValue": final_volume_id},
+                  {"ParameterKey": "InstanceType", "ParameterValue": args.instance_type},
+                  {"ParameterKey": "AvailabilityZone", "ParameterValue": availability_zone}]
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     new_stack_name = f"{STACK_PREFIX}-{timestamp}"
@@ -308,10 +324,7 @@ def main():
     logger.info("    SetupCommand:          %s", args.setup_command)
     logger.info("    ExistingVolumeId:      '%s'", final_volume_id)
     logger.info("    InstanceType:          %s", args.instance_type)
-    if availability_zone:
-        logger.info("    AvailabilityZone:      %s (pinned to match volume)", availability_zone)
-    else:
-        logger.info("    AvailabilityZone:      (automatic selection)")
+    logger.info("    AvailabilityZone:      %s", availability_zone)
 
     # Not executing: emit structured result and stop before any remaining state writes
     if not args.execute:
