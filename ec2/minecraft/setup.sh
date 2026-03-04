@@ -10,7 +10,7 @@ This script sets up a Minecraft server with the following configurations:
 - Java Package: the package to install for java on the server
 
 Usage:
-setup.sh --server-folder=<path> --server-version=<version> --jar-url=<url> --java-package=<package>
+./ec2/minecraft/setup.sh --server-folder=<path> --server-version=<version> --jar-url=<url> --java-package=<package>
 
 The script is designed to be invoked as root via the UserData script of a
 linux game server instance (defined in a CloudFormation template).
@@ -22,8 +22,8 @@ The SetupCommand parameter must include the needed arguments.
 ======================================================================
 EOF
 
-if [ ! -d ./minecraft ]; then
-  echo "setup must run from repository root (missing minecraft subdirectory)"
+if [ ! -d ./ec2/minecraft ]; then
+  echo "setup must run from repository root (missing ec2/minecraft subdirectory)"
   exit 1
 fi
 
@@ -141,7 +141,7 @@ EOF
 
 startScriptPath="/mnt/persist/minecraft/${serverFolder}/start-minecraft.sh"
 echo "!! Install the start-minecraft.sh wrapper script at $startScriptPath"
-cp minecraft/start-minecraft.sh "$startScriptPath"
+cp ec2/minecraft/start-minecraft.sh "$startScriptPath"
 # Make the script executable
 chmod +x "$startScriptPath"
 # Ensure the script is owned by ec2-user
@@ -149,7 +149,7 @@ chown ec2-user:ec2-user "$startScriptPath"
 
 stopScriptPath="/mnt/persist/minecraft/${serverFolder}/stop-minecraft.sh"
 echo "!! Install the stop-minecraft.sh wrapper script at $stopScriptPath"
-cp minecraft/stop-minecraft.sh "$stopScriptPath"
+cp ec2/minecraft/stop-minecraft.sh "$stopScriptPath"
 # Make the script executable
 chmod +x "$stopScriptPath"
 # Ensure the script is owned by ec2-user

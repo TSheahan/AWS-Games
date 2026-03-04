@@ -1,6 +1,6 @@
-# minecraft/ — Server-Side Wrapper Scripts
+# ec2/minecraft/ — EC2-Side Minecraft Scripts
 
-Scripts in this directory are installed onto the **EC2 instance** by `setup.sh` during first-boot provisioning. They are copied into the server's working directory under `/mnt/persist/minecraft/<folder>/`.
+Scripts in this directory run on the **EC2 instance**. `ec2/minecraft/setup.sh` is invoked by UserData during first-boot provisioning. The start/stop wrappers are copied by `setup.sh` into each server's working directory under `/mnt/persist/minecraft/<folder>/`.
 
 **Target environment:** Amazon Linux 2023, ARM64 (Graviton). Do not introduce x86-specific packages, paths, or assumptions.
 
@@ -42,3 +42,27 @@ These scripts are called by the `minecraft-server.service` unit (created by `set
 
 Attach to a running console: `screen -r minecraft`
 Detach without stopping: `Ctrl+A, D`
+
+---
+
+## `provision_servers.py`
+
+Multi-server systemd provisioner.
+
+**Runs on:** EC2 instance, as root
+**Config source:** `https://github.com/TSheahan/AWS-Games-Config.git`
+**Port bounds source:** `/home/ec2-user/game-ports.json` (written by CloudFormation UserData)
+**Log file:** `/var/log/minecraft-provision.log` (world-readable)
+
+Modes (use together or separately):
+- `--update` — clone or pull the config repo
+- `--read-only` — validate config without writing any files
+- `--provision` — full write: systemd units, start/stop scripts, server.properties, enabled/disabled state
+
+Generates per-server files under `/mnt/persist/minecraft/<folder>/` and systemd units under `/etc/systemd/system/minecraft-<server_id>.service`. Cleans up stale units for servers removed from config.
+
+---
+
+## `mcstatus.sh`
+
+Quick status display for all `minecraft-*.service` units. Runs on EC2 as any user.

@@ -18,7 +18,7 @@ Developer workstation
               └── EC2 UserData bootstrap
                     ├── Mount EBS volume → /mnt/persist
                     ├── git clone AWS-Games repo
-                    └── Run SetupCommand (e.g. setup.sh)
+                    └── Run SetupCommand (e.g. ec2/minecraft/setup.sh)
                           └── Install JDK, systemd service, server JAR
                                 └── (optionally) provision_servers.py
                                       └── git clone AWS-Games-Config repo
@@ -46,12 +46,12 @@ Developer workstation
 |---|---|---|
 | `cloudformation_server_stack.yaml` | AWS | IaC template; creates EC2, EBS, EIP, SG |
 | `bin/reinstall_stack.py` | Workstation | Delete old stack, create new timestamped stack |
-| `bin/provision_servers.py` | EC2 instance (root) | Multi-server systemd unit management |
-| `bin/mcstatus.sh` | EC2 instance | Quick status display of all minecraft-*.service units |
-| `setup.sh` | EC2 instance (root, via UserData) | Initial Java install, server JAR download, systemd unit creation |
-| `update-release.sh` | EC2 instance (ec2-user) | AL2023 release version upgrade helper |
-| `minecraft/start-minecraft.sh` | EC2 instance | Start server in detached screen session with logging |
-| `minecraft/stop-minecraft.sh` | EC2 instance | Graceful shutdown (in-game warning → /stop) |
+| `ec2/minecraft/provision_servers.py` | EC2 instance (root) | Multi-server systemd unit management |
+| `ec2/minecraft/mcstatus.sh` | EC2 instance | Quick status display of all minecraft-*.service units |
+| `ec2/minecraft/setup.sh` | EC2 instance (root, via UserData) | Initial Java install, server JAR download, systemd unit creation |
+| `ec2/update-release.sh` | EC2 instance (ec2-user) | AL2023 release version upgrade helper |
+| `ec2/minecraft/start-minecraft.sh` | EC2 instance | Start server in detached screen session with logging |
+| `ec2/minecraft/stop-minecraft.sh` | EC2 instance | Graceful shutdown (in-game warning → /stop) |
 | `requirements.txt` | Workstation | boto3, pyyaml, botocore |
 
 ---
@@ -76,8 +76,8 @@ Developer workstation
 3. Formats EBS as ext4 if new; mounts to `/mnt/persist`; adds UUID fstab entry
 4. Clones this repository (`AWS-Games`) into ec2-user's home
 5. Writes `/home/ec2-user/game-ports.json` with port range
-6. Copies `update-release.sh` to ec2-user home
-7. Executes the `SetupCommand` parameter (e.g. `./setup.sh --server-folder=vanilla ...`)
+6. Copies `ec2/update-release.sh` to ec2-user home
+7. Executes the `SetupCommand` parameter (e.g. `./ec2/minecraft/setup.sh --server-folder=vanilla ...`)
 
 ### setup.sh (first-time server provisioning)
 - Must be run from repo root; validates `/mnt/persist` is mounted
@@ -85,12 +85,12 @@ Developer workstation
 - Creates `/mnt/persist/minecraft/<folder>/`
 - Downloads server JAR → `/home/ec2-user/minecraft_server_<version>.jar`
 - Symlinks JAR into server folder
-- Installs `minecraft/start-minecraft.sh` and `minecraft/stop-minecraft.sh`
+- Installs `ec2/minecraft/start-minecraft.sh` and `ec2/minecraft/stop-minecraft.sh`
 - Creates and enables `minecraft-server.service` systemd unit (not started)
 
 ---
 
-## Multi-Server Provisioning (`bin/provision_servers.py`)
+## Multi-Server Provisioning (`ec2/minecraft/provision_servers.py`)
 
 Reads `minecraft-servers.yaml` from a **separate private config repo** (`AWS-Games-Config`). Generates per-server systemd units, start/stop scripts, and `server.properties`.
 

@@ -19,7 +19,7 @@ python bin/reinstall_stack.py --setup-command "./setup.sh ..."
 1. Any existing stack is cleanly torn down (with data retained on the EBS volume)
 2. A new CloudFormation stack provisions EC2, EBS, Elastic IP, and Security Group
 3. The EC2 instance mounts persistent storage and clones this repository
-4. The instance executes `setup.sh` to install Java, download the server JAR, and register a systemd service
+4. The instance executes `ec2/minecraft/setup.sh` to install Java, download the server JAR, and register a systemd service
 5. `provision_servers.py` (optionally) reads a separate config repo to generate per-server systemd units
 
 The result is a running game server, reconstructed from scratch, with world data intact from the previous deployment.
@@ -38,13 +38,13 @@ Developer workstation
                   ├── Waits for EBS device, formats if new, mounts to /mnt/persist
                   ├── git clone github.com/TSheahan/AWS-Games  ← repo clones itself onto the instance
                   ├── Writes game-ports.json with port range
-                  └── Executes SetupCommand parameter (e.g. ./setup.sh ...)
-                        └── setup.sh
+                  └── Executes SetupCommand parameter (e.g. ./ec2/minecraft/setup.sh ...)
+                        └── ec2/minecraft/setup.sh
                               ├── Installs Java (Amazon Corretto via yum)
                               ├── Downloads server JAR, creates symlink
                               ├── Copies start/stop wrapper scripts
                               └── Creates and enables minecraft-server.service
-                                    └── (optional) bin/provision_servers.py
+                                    └── (optional) ec2/minecraft/provision_servers.py
                                           ├── Clones AWS-Games-Config repo
                                           ├── Reads minecraft-servers.yaml
                                           └── Generates per-server systemd units
@@ -87,16 +87,16 @@ The infrastructure template. Parameterised for port range, instance type, setup 
 ### `bin/reinstall_stack.py`
 Developer workflow tool. Handles the full stack lifecycle: discovery, safe deletion, volume ID adoption, AZ detection, and timestamped creation. Supports environment variable configuration for scripted invocation. Argument precedence: explicit CLI > env vars > defaults.
 
-### `bin/provision_servers.py`
+### `ec2/minecraft/provision_servers.py`
 Multi-server provisioning system. Runs on the EC2 instance as root. Reads a YAML configuration from a separate repository and generates per-server systemd service units, start/stop scripts, and `server.properties` files. Supports `--read-only` validation and separate `--update`/`--provision` phases.
 
-### `setup.sh`
+### `ec2/minecraft/setup.sh`
 First-boot server provisioner. Validates preconditions (persistent mount, required args), installs the JDK, downloads the server JAR, and registers the initial systemd service. Invoked via the `SetupCommand` CloudFormation parameter from UserData.
 
-### `minecraft/start-minecraft.sh` and `stop-minecraft.sh`
+### `ec2/minecraft/start-minecraft.sh` and `stop-minecraft.sh`
 systemd service wrappers. `start-minecraft.sh` validates EULA acceptance and server config before launching the JVM in a detached screen session with dated console logging. `stop-minecraft.sh` sends an in-game warning then `/stop`, giving players notice before the process exits.
 
-### `bin/mcstatus.sh`
+### `ec2/minecraft/mcstatus.sh`
 Quick operational status display. Lists all `minecraft-*.service` units with coloured status indicators (running / stopped / failed).
 
 ---
@@ -113,7 +113,7 @@ pip install -r requirements.txt
 python bin/reinstall_stack.py \
   --port-start 25565 \
   --port-end 25565 \
-  --setup-command "./setup.sh --server-folder=vanilla --server-version=1.21 \
+  --setup-command "./ec2/minecraft/setup.sh --server-folder=vanilla --server-version=1.21 \
     --jar-url=https://example.com/server.jar \
     --java-package=java-21-amazon-corretto-devel" \
   --instance-type t4g.medium
@@ -148,16 +148,17 @@ screen -r minecraft
 
 ```
 cloudformation_server_stack.yaml   Infrastructure template
-setup.sh                           First-boot provisioner (invoked by UserData)
-update-release.sh                  AL2023 release upgrade helper (ec2-user)
 requirements.txt                   Python dependencies (boto3, pyyaml)
 bin/
   reinstall_stack.py               Stack lifecycle management (workstation)
-  provision_servers.py             Multi-server systemd provisioner (EC2, root)
-  mcstatus.sh                      Server status display (EC2)
-minecraft/
-  start-minecraft.sh               JVM launch wrapper (installed to server folder by setup.sh)
-  stop-minecraft.sh                Graceful shutdown wrapper (installed to server folder by setup.sh)
+ec2/
+  update-release.sh                AL2023 release upgrade helper (ec2-user)
+  minecraft/
+    setup.sh                       First-boot provisioner (invoked by UserData)
+    provision_servers.py           Multi-server systemd provisioner (EC2, root)
+    mcstatus.sh                    Server status display (EC2)
+    start-minecraft.sh             JVM launch wrapper (installed to server folder by setup.sh)
+    stop-minecraft.sh              Graceful shutdown wrapper (installed to server folder by setup.sh)
 ```
 
 ---

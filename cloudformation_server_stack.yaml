@@ -125,7 +125,7 @@ Resources:
           cd /home/ec2-user
           git clone https://github.com/TSheahan/AWS-Games.git
           chown -R ec2-user:ec2-user AWS-Games
-          chmod +x AWS-Games/setup.sh AWS-Games/update-release.sh  # Ensure executability post-clone
+          chmod +x AWS-Games/ec2/minecraft/setup.sh AWS-Games/ec2/update-release.sh  # Ensure executability post-clone
           cd AWS-Games
           
           echo "!! Write game port range to JSON for future scripts"
@@ -138,7 +138,7 @@ Resources:
           chown ec2-user:ec2-user /home/ec2-user/game-ports.json
 
           echo "!! Copy update-release script for ec2-user"
-          cp update-release.sh /home/ec2-user/update-release.sh
+          cp ec2/update-release.sh /home/ec2-user/update-release.sh
           chown ec2-user:ec2-user /home/ec2-user/update-release.sh
           chmod +x /home/ec2-user/update-release.sh
           

@@ -1,6 +1,6 @@
 # bin/ — Developer Workstation Tools
 
-Scripts in this directory run on the **developer workstation**, not on the EC2 instance (with the exception of `provision_servers.py`, which is installed on the instance and run there as root).
+Scripts in this directory run on the **developer workstation**, not on the EC2 instance.
 
 ---
 
@@ -28,30 +28,6 @@ Environment variables accepted:
 - `GAME_INSTANCE_TYPE` → `--instance-type`
 
 Stack names are timestamped: `GameStack-YYYYMMDD-HHMMSS`.
-
----
-
-## `provision_servers.py`
-
-Multi-server systemd provisioner.
-
-**Runs on:** EC2 instance, as root
-**Config source:** `https://github.com/TSheahan/AWS-Games-Config.git`
-**Port bounds source:** `/home/ec2-user/game-ports.json` (written by CloudFormation UserData)
-**Log file:** `/var/log/minecraft-provision.log` (world-readable)
-
-Modes (use together or separately):
-- `--update` — clone or pull the config repo
-- `--read-only` — validate config without writing any files
-- `--provision` — full write: systemd units, start/stop scripts, server.properties, enabled/disabled state
-
-Generates per-server files under `/mnt/persist/minecraft/<folder>/` and systemd units under `/etc/systemd/system/minecraft-<server_id>.service`. Cleans up stale units for servers removed from config.
-
----
-
-## `mcstatus.sh`
-
-Quick status display for all `minecraft-*.service` units. Runs on EC2 as any user.
 
 ---
 
