@@ -7,14 +7,14 @@ Developer tool to accelerate iteration on the GameStack CloudFormation deploymen
 
 Workflow:
 1. Find active stacks in ap-southeast-4 whose name starts with 'GameStack'.
-2. If exactly one exists → prompt to delete it.
+2. If exactly one exists → prompt to delete it (skipped with --yes or --dry-run).
 3. If multiple → error and abort.
 4. If none → proceed directly.
 5. Delete confirmed stack and wait for DELETE_COMPLETE.
-6. Determine volume handling and show user before creation confirmation.
-7. Prompt to create a new stack.
+6. Determine volume handling and resolve all parameters.
+7. Prompt to create a new stack (skipped with --yes or --dry-run).
 8. Create a new timestamped stack using the local template.
-9. Wait for CREATE_COMPLETE and display key outputs (ServerIP, etc.).
+9. Wait for CREATE_COMPLETE and emit key outputs as JSON on stdout.
 
 Authentication: Uses standard AWS credential chain (~/.aws/credentials, env vars, etc.).
 Optional --profile override provided.
@@ -33,25 +33,47 @@ Environment variable support:
 
 Explicit CLI arguments always override environment variables.
 
-Key new feature:
+AZ pinning:
   When ExistingVolumeId is non-empty (either explicit, reused, or from env),
   the script automatically detects the volume's Availability Zone using EC2 describe_volumes
   and passes it as a new CloudFormation parameter AvailabilityZone.
   This pins the EC2 instance to the correct AZ, preventing attachment failures.
+
+Safe by default: --execute required to write state
+  Without --execute the script resolves all parameters and reports what would happen,
+  but makes no AWS state changes. This is the default mode.
+  Pass --execute to actually delete/create stacks.
+
+Confirmation skipping: --yes / -y
+  Skip both interactive confirmation prompts when running with --execute.
+  Intended for agentic or CI use. The parameter summary is still printed to stderr.
+
+Output:
+  Status and progress messages → stderr (via logger).
+  Structured result (stack outputs or dry-run parameters) → stdout as JSON.
 """
 
 import argparse
 import datetime
+import logging
 import os
 import sys
 
 import boto3
+import yaml
 from botocore.exceptions import ClientError, WaiterError
 
 
 REGION = "ap-southeast-4"
 STACK_PREFIX = "GameStack"
 TEMPLATE_PATH = "../cloudformation_server_stack.yaml"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(levelname)s] %(message)s",
+    stream=sys.stderr,
+)
+logger = logging.getLogger(__name__)
 
 
 def get_cf_client(profile: str):
@@ -89,56 +111,70 @@ def get_volume_az(ec2_client, volume_id: str) -> str:
     try:
         response = ec2_client.describe_volumes(VolumeIds=[volume_id])
         if not response["Volumes"]:
-            print(f"Warning: Volume {volume_id} not found in region {REGION}.")
+            logger.error("Volume %s not found in region %s.", volume_id, REGION)
             sys.exit(1)
         az = response["Volumes"][0]["AvailabilityZone"]
         return az
     except ClientError as e:
         if e.response["Error"]["Code"] == "InvalidVolume.NotFound":
-            print(f"Error: Volume {volume_id} does not exist or is not accessible.")
+            logger.error("Volume %s does not exist or is not accessible.", volume_id)
         else:
-            print(f"Error describing volume {volume_id}: {e}")
+            logger.error("Error describing volume %s: %s", volume_id, e)
         sys.exit(1)
 
 
-def delete_stack(client, stack_name: str):
-    """Delete the stack and wait for completion."""
-    print(f"Deleting stack {stack_name}...")
+def delete_stack(client, stack_name: str, dry_run: bool = False) -> None:
+    """Delete the stack and wait for completion.
+
+    dry_run: log intent and return without calling the AWS API.
+    Gate is placed immediately before the state-writing call.
+    """
+    logger.info("Deleting stack %s...", stack_name)
+    if dry_run:
+        logger.info("[DRY RUN] Would call client.delete_stack('%s') — skipping.", stack_name)
+        return
     client.delete_stack(StackName=stack_name)
     waiter = client.get_waiter("stack_delete_complete")
     try:
         waiter.wait(StackName=stack_name)
-        print(f"Stack {stack_name} deleted successfully.")
+        logger.info("Stack %s deleted successfully.", stack_name)
     except WaiterError as e:
-        print(f"Error waiting for deletion of {stack_name}: {e}")
+        logger.error("Error waiting for deletion of %s: %s", stack_name, e)
         sys.exit(1)
 
 
-def create_stack(client, stack_name: str, template_body: str, parameters: list):
-    """Create the stack and wait for completion."""
-    print(f"Creating stack {stack_name}...")
-    response = client.create_stack(
+def create_stack(client, stack_name: str, template_body: str, parameters: list,
+                 dry_run: bool = False) -> None:
+    """Create the stack and wait for completion.
+
+    dry_run: log intent and return without calling the AWS API.
+    Gate is placed immediately before the state-writing call.
+    """
+    logger.info("Creating stack %s...", stack_name)
+    if dry_run:
+        logger.info("[DRY RUN] Would call client.create_stack('%s') — skipping.", stack_name)
+        return
+    client.create_stack(
         StackName=stack_name,
         TemplateBody=template_body,
         Parameters=parameters,
         Capabilities=["CAPABILITY_IAM", "CAPABILITY_NAMED_IAM"],
         OnFailure="DELETE",
     )
-    print("Creation initiated. Waiting for completion (this may take several minutes)...")
+    logger.info("Creation initiated. Waiting for completion (this may take several minutes)...")
     waiter = client.get_waiter("stack_create_complete")
     try:
         waiter.wait(StackName=stack_name)
-        print(f"Stack {stack_name} created successfully.")
+        logger.info("Stack %s created successfully.", stack_name)
     except WaiterError as e:
-        print(f"Stack creation failed: {e}")
-        # Fetch failure reason
-        desc = client.describe_stacks(StackName=stack_name)
+        logger.error("Stack creation failed: %s", e)
         events = client.describe_stack_events(StackName=stack_name)["StackEvents"]
         failed = [ev for ev in events if ev["ResourceStatus"].endswith("FAILED")]
         if failed:
-            print("Recent failure events:")
+            logger.error("Recent failure events:")
             for ev in failed[:5]:
-                print(f"  {ev['ResourceStatus']} - {ev['ResourceType']} - {ev.get('ResourceStatusReason', 'No reason')}")
+                logger.error("  %s - %s - %s", ev["ResourceStatus"], ev["ResourceType"],
+                             ev.get("ResourceStatusReason", "No reason"))
         sys.exit(1)
 
 
@@ -168,7 +204,7 @@ def main():
                         default=env_defaults["setup_command"],
                         required=(not env_defaults["setup_command"]),
                         help="Full SetupCommand string (required unless GAME_SETUP_COMMAND is set)")
-    parser.add_argument("--existing-volume-id", type=str, default=None,
+    parser.add_argument("--existing-volume-id", type=str, default=env_defaults["existing_volume_id"],
                         help="ExistingVolumeId; if omitted and --reuse-existing-volume is true, adopt from previous stack "
                              "(or use GAME_EXISTING_VOLUME_ID)")
     parser.add_argument("--instance-type", type=str,
@@ -180,7 +216,15 @@ def main():
     parser.add_argument("--no-reuse-existing-volume", action="store_false", dest="reuse_volume",
                         help="Do not reuse ExistingVolumeId from previous stack")
     parser.set_defaults(reuse_volume=True)
+    parser.add_argument("--yes", "-y", action="store_true", dest="yes",
+                        help="Skip interactive confirmations when running with --execute (for agentic or CI use)")
+    parser.add_argument("--execute", action="store_true", dest="execute",
+                        help="Actually perform AWS state changes (delete/create). Default is a dry run — safe by default.")
     args = parser.parse_args()
+
+    # Without --execute the script is non-destructive — no interactive prompts needed
+    if not args.execute:
+        args.yes = True
 
     # Resolve port-end: CLI > env > port-start
     if args.port_end is None:
@@ -199,66 +243,50 @@ def main():
     deleted_stack_name = None
 
     if len(stacks) > 1:
-        print("Error: Multiple GameStack stacks found:")
+        logger.error("Multiple GameStack stacks found:")
         for s in stacks:
-            print(f"  - {s['StackName']} ({s['StackStatus']})")
-        print("Please clean up manually and try again.")
+            logger.error("  - %s (%s)", s["StackName"], s["StackStatus"])
+        logger.error("Please clean up manually and try again.")
         sys.exit(1)
 
     if len(stacks) == 1:
         stack = stacks[0]
-        print(f"Found existing stack: {stack['StackName']} ({stack['StackStatus']})")
-        confirm = input("Delete this stack? Press Enter to continue or Ctrl+C to abort: ")
-        if confirm != "":
-            print("Aborted.")
-            sys.exit(0)
+        logger.info("Found existing stack: %s (%s)", stack["StackName"], stack["StackStatus"])
+        if not args.yes:
+            confirm = input("Delete this stack? Press Enter to continue or Ctrl+C to abort: ")
+            if confirm != "":
+                print("Aborted.")
+                sys.exit(0)
 
         # Fetch parameters to possibly reuse ExistingVolumeId
         params = get_stack_parameters(cf_client, stack["StackName"])
         old_volume_id = params.get("ExistingVolumeId", "")
         deleted_stack_name = stack["StackName"]
 
-        delete_stack(cf_client, deleted_stack_name)
+        delete_stack(cf_client, deleted_stack_name, dry_run=not args.execute)
 
-    # Determine final ExistingVolumeId early, before creation confirmation
+    # Determine final ExistingVolumeId
     final_volume_id = args.existing_volume_id
 
     if final_volume_id is not None:
-        print(f"Using explicitly provided ExistingVolumeId: {final_volume_id}")
+        logger.info("Using explicitly provided ExistingVolumeId: %s", final_volume_id)
     elif args.reuse_volume and old_volume_id:
-        print(f"Reusing ExistingVolumeId '{old_volume_id}' from previous stack {deleted_stack_name or ''}.")
+        logger.info("Reusing ExistingVolumeId '%s' from previous stack %s.", old_volume_id, deleted_stack_name or "")
         final_volume_id = old_volume_id
     else:
-        print("No existing volume specified — a new EBS volume will be created.")
+        logger.info("No existing volume specified — a new EBS volume will be created.")
         final_volume_id = ""
 
     # Detect AvailabilityZone if we're using an existing volume
     availability_zone = None
     if final_volume_id:
-        print(f"Detecting Availability Zone for volume {final_volume_id}...")
+        logger.info("Detecting Availability Zone for volume %s...", final_volume_id)
         availability_zone = get_volume_az(ec2_client, final_volume_id)
-        print(f"Volume is in Availability Zone: {availability_zone}")
+        logger.info("Volume is in Availability Zone: %s", availability_zone)
     else:
-        print("New volume will be created — Availability Zone will be chosen automatically by AWS.")
+        logger.info("New volume will be created — Availability Zone will be chosen automatically by AWS.")
 
-    # Confirm creation with full visibility
-    print("\nReady to create a new stack.")
-    print(f"  Parameters summary:")
-    print(f"    ServerPortNumberStart: {args.port_start}")
-    print(f"    ServerPortNumberEnd: {args.port_end}")
-    print(f"    SetupCommand: {args.setup_command}")
-    print(f"    ExistingVolumeId: '{final_volume_id}'")
-    print(f"    InstanceType: {args.instance_type}")
-    if availability_zone:
-        print(f"    AvailabilityZone: {availability_zone} (pinned to match volume)")
-    else:
-        print(f"    AvailabilityZone: (automatic selection)")
-    confirm = input("\nProceed with stack creation? Press Enter to continue or Ctrl+C to abort: ")
-    if confirm != "":
-        print("Aborted.")
-        sys.exit(0)
-
-    # Build parameters list for CloudFormation
+    # Build parameters list and stack name before the summary so dry-run has the full picture
     parameters = [
         {"ParameterKey": "ServerPortNumberStart", "ParameterValue": str(args.port_start)},
         {"ParameterKey": "ServerPortNumberEnd", "ParameterValue": str(args.port_end)},
@@ -269,29 +297,59 @@ def main():
     if availability_zone:
         parameters.append({"ParameterKey": "AvailabilityZone", "ParameterValue": availability_zone})
 
-    # Read template
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    new_stack_name = f"{STACK_PREFIX}-{timestamp}"
+
+    # Parameter summary — always emitted to stderr regardless of dry-run or --yes
+    logger.info("Ready to create stack %s.", new_stack_name)
+    logger.info("  Parameters:")
+    logger.info("    ServerPortNumberStart: %s", args.port_start)
+    logger.info("    ServerPortNumberEnd:   %s", args.port_end)
+    logger.info("    SetupCommand:          %s", args.setup_command)
+    logger.info("    ExistingVolumeId:      '%s'", final_volume_id)
+    logger.info("    InstanceType:          %s", args.instance_type)
+    if availability_zone:
+        logger.info("    AvailabilityZone:      %s (pinned to match volume)", availability_zone)
+    else:
+        logger.info("    AvailabilityZone:      (automatic selection)")
+
+    # Not executing: emit structured result and stop before any remaining state writes
+    if not args.execute:
+        result = {
+            "dry_run": True,
+            "would_delete": deleted_stack_name,
+            "new_stack_name": new_stack_name,
+            "parameters": {p["ParameterKey"]: p["ParameterValue"] for p in parameters},
+        }
+        print(yaml.dump(result, default_flow_style=False, sort_keys=False))
+        return
+
+    if not args.yes:
+        confirm = input("\nProceed with stack creation? Press Enter to continue or Ctrl+C to abort: ")
+        if confirm != "":
+            print("Aborted.")
+            sys.exit(0)
+
+    # Read template — deferred until after confirmation to avoid unnecessary I/O on abort
     try:
         with open(TEMPLATE_PATH, "r") as f:
             template_body = f.read()
     except FileNotFoundError:
-        print(f"Error: Template file not found at {TEMPLATE_PATH}")
+        logger.error("Template file not found at %s", TEMPLATE_PATH)
         sys.exit(1)
-
-    # Generate timestamped stack name
-    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    new_stack_name = f"{STACK_PREFIX}-{timestamp}"
 
     create_stack(cf_client, new_stack_name, template_body, parameters)
 
-    # Display outputs
+    # Emit stack outputs as structured JSON on stdout
     outputs = get_stack_outputs(cf_client, new_stack_name)
-    print("\nStack creation complete. Key outputs:")
-    for key, value in outputs.items():
-        print(f"  {key}: {value}")
+    result = {
+        "stack_name": new_stack_name,
+        "outputs": outputs,
+    }
+    print(yaml.dump(result, default_flow_style=False, sort_keys=False))
 
-    # Highlight the most useful one
     if "ServerIP" in outputs:
-        print(f"\nConnect via SSH: ssh -i your-key.pem ec2-user@{outputs['ServerIP']}")
+        logger.info("Connect via SSH: ssh -i ~/.ssh/tim_ssh_to_game_server ec2-user@%s", outputs["ServerIP"])
 
 
 if __name__ == "__main__":

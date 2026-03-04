@@ -18,7 +18,8 @@ Key behaviours:
 - Adopts `ExistingVolumeId` from the deleted stack's parameters automatically unless `--no-reuse-existing-volume` is passed
 - Calls `ec2.describe_volumes` to detect the volume's Availability Zone and passes it as `AvailabilityZone` to CloudFormation — this prevents attachment failures when reusing an existing EBS volume
 - Argument precedence: explicit CLI flag > environment variable > default value
-- Always shows a full parameter summary and requires Enter confirmation before creating
+- Safe by default: without `--execute` the script is a dry run — resolves all parameters and emits YAML to stdout but makes no AWS state changes
+- `--execute` required to actually delete/create stacks; `--yes` / `-y` skips interactive confirmations when executing (for agentic or CI use)
 
 Environment variables accepted:
 - `GAME_PORT_START` → `--port-start`
