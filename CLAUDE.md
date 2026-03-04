@@ -137,3 +137,9 @@ provisioned:
 - Template path is relative: `../cloudformation_server_stack.yaml` from `bin/`
 - Shell scripts use bash and target Amazon Linux 2023 (AL2023)
 - Graviton (ARM64) instances only — scripts and AMIs are ARM-specific
+
+### Game extensibility model
+
+`ec2/` is game-agnostic. Each game type owns a subdirectory (`ec2/minecraft/`, `ec2/<game>/`, …). The CloudFormation `SetupCommand` parameter carries the path to the relevant game's setup script — the path *is* the dispatch mechanism.
+
+A game-agnostic `ec2/setup.sh` orchestrator layer has been considered and deliberately deferred. Introduce it when a second game type is added and shared instance-level setup work is real rather than projected. Do not introduce it speculatively.

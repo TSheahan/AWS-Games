@@ -2,6 +2,8 @@
 
 Scripts in this directory run on the **EC2 instance**. `ec2/minecraft/setup.sh` is invoked by UserData during first-boot provisioning. The start/stop wrappers are copied by `setup.sh` into each server's working directory under `/mnt/persist/minecraft/<folder>/`.
 
+`setup.sh` is classified at the `minecraft/` level by **content scope** — its content is entirely Minecraft-specific (JDK version selection, `/mnt/persist/minecraft/` paths, `minecraft-server.service` unit). Invocation via UserData (a singleton per instance lifecycle) does not make it game-agnostic. The CloudFormation `SetupCommand` parameter is the game-selection mechanism: it carries the path to whichever game's setup script is needed. A future game type would supply `ec2/<game>/setup.sh` alongside this directory.
+
 **Target environment:** Amazon Linux 2023, ARM64 (Graviton). Do not introduce x86-specific packages, paths, or assumptions.
 
 ---
