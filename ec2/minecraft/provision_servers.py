@@ -105,7 +105,13 @@ def guarded_mkdir(path: pathlib.Path, read_only: bool) -> None:
     logger.info("Ensured directory exists: %s", path)
 
 
-def guarded_write_text(path: pathlib.Path, content: str, mode: int = 0o644, read_only: bool = False) -> None:
+def guarded_write_text(
+    path: pathlib.Path,
+    content: str,
+    mode: int = 0o644,
+    read_only: bool = False,
+    owner: Optional[str] = None,
+) -> None:
     if read_only:
         logger.info("[READ-ONLY] Would write to %s", path)
         logger.debug("Content that would be written:\n%s", content)
@@ -113,6 +119,8 @@ def guarded_write_text(path: pathlib.Path, content: str, mode: int = 0o644, read
     logger.debug("Writing content to %s:\n%s", path, content)
     path.write_text(content)
     path.chmod(mode)
+    if owner:
+        run_cmd(["chown", f"{owner}:{owner}", str(path)])
     logger.info("Wrote file %s", path)
 
 
@@ -233,7 +241,7 @@ def update_server_properties(folder_path: pathlib.Path, port: int, read_only: bo
         content += f"{key}={props[key]}\n"
     content += "\n"
 
-    guarded_write_text(props_path, content, read_only=read_only)
+    guarded_write_text(props_path, content, read_only=read_only, owner=EC2_USER)
 
 
 def ensure_eula_accepted(folder_path: pathlib.Path, server_id: str, read_only: bool) -> None:
@@ -246,7 +254,7 @@ def ensure_eula_accepted(folder_path: pathlib.Path, server_id: str, read_only: b
             "# Please read and accept the Minecraft EULA: https://aka.ms/MinecraftEULA\n"
             "eula=true\n"
         )
-        guarded_write_text(eula_path, content, mode=0o644, read_only=read_only)
+        guarded_write_text(eula_path, content, mode=0o644, read_only=read_only, owner=EC2_USER)
         if not read_only:
             logger.info("Created eula.txt with eula=true for server %s", server_id)
         return

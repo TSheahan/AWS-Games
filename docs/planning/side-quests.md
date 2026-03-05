@@ -5,21 +5,6 @@ distinct value in the solving. Pick up opportunistically.
 
 ---
 
-## [BUG] eula.txt and server.properties ownership
-
-**Pain point:** `provision_servers.py` writes `eula.txt` and `server.properties` as root
-(it runs via UserData/sudo). Files end up owned by `root:root`, so `ec2-user` cannot
-edit them without sudo — breaking the post-deploy EULA acceptance step
-(`eula=true` in `eula.txt`) and any manual server tuning.
-
-**Fix:** After writing each file, call `chown ec2-user:ec2-user` (or use Python's
-`os.chown` with the ec2-user UID/GID). Apply to both files wherever they are written.
-
-**Scope:** `ec2/minecraft/provision_servers.py` — file-write sites for `eula.txt` and
-`server.properties`.
-
----
-
 ## Enhanced /usage view
 
 **Pain point:** `/usage` shows current consumption but gives no sense of how far the weekly

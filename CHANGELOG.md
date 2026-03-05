@@ -5,6 +5,14 @@ provide finer-grained detail; this log captures intent and trajectory.
 
 ---
 
+## 2026-03-05 — Bug fix: eula.txt and server.properties ownership
+
+- `guarded_write_text` now accepts an `owner` parameter; when set, calls `chown <owner>:<owner>` after writing
+- `update_server_properties` and `ensure_eula_accepted` pass `owner=EC2_USER` so both files are written as `ec2-user:ec2-user` rather than `root:root`
+- Systemd unit files continue to be written without `owner`, preserving root ownership
+
+---
+
 ## 2026-03-04 — Repo restructure, provisioning hardening, agentic readiness, and end-to-end validation
 
 **Repo restructure**
