@@ -5,6 +5,21 @@ distinct value in the solving. Pick up opportunistically.
 
 ---
 
+## [BUG] eula.txt and server.properties ownership
+
+**Pain point:** `provision_servers.py` writes `eula.txt` and `server.properties` as root
+(it runs via UserData/sudo). Files end up owned by `root:root`, so `ec2-user` cannot
+edit them without sudo — breaking the post-deploy EULA acceptance step
+(`eula=true` in `eula.txt`) and any manual server tuning.
+
+**Fix:** After writing each file, call `chown ec2-user:ec2-user` (or use Python's
+`os.chown` with the ec2-user UID/GID). Apply to both files wherever they are written.
+
+**Scope:** `ec2/minecraft/provision_servers.py` — file-write sites for `eula.txt` and
+`server.properties`.
+
+---
+
 ## Enhanced /usage view
 
 **Pain point:** `/usage` shows current consumption but gives no sense of how far the weekly
@@ -47,6 +62,39 @@ scriptable as-is.
 - One-off manual allocation or a minimal "persistent resources" stack that holds both the EIP and the EBS volume? A shared persistent stack is cleaner if the pattern is repeated.
 - `reinstall_stack.py` already handles `ExistingVolumeId` as a pass-through parameter — `ExistingAllocationId` would follow the same pattern with the same reuse logic.
 - Does this warrant a corresponding `GAME_EXISTING_ALLOCATION_ID` env var, or is CLI-only sufficient?
+
+---
+
+## Systemd service status shortcut
+
+**Pain point:** No ergonomic shortcut to surface the health of all `minecraft-*` systemd
+units at a glance from the server prompt.
+
+**Current state — `ec2/minecraft/mcstatus.sh` reviewed (2026-03-05):**
+
+Script iterates `systemctl list-unit-files --no-legend 'minecraft-*.service'` and calls
+`systemctl is-active` per unit. Has a bug: `is-active` exits non-zero for inactive services,
+so `|| echo "unknown"` fires — both the real status text and "unknown" are captured in the
+same command substitution, producing malformed output (`❓ inactive` line + a dangling
+`unknown` line per unit). Fix: replace `|| echo "unknown"` with `|| true` and a separate
+empty-check.
+
+Observed on first boot (all servers inactive as expected — `vanilla` configured to
+auto-start on next boot, not this one):
+
+```
+minecraft-famine.service     ❓ inactive    ← should be ⚪ stopped
+minecraft-vanilla.service    ❓ inactive    ← ditto
+unknown                                     ← spurious, one per unit
+```
+
+**Next steps:**
+1. Fix the `|| echo "unknown"` bug so inactive services render as `⚪ stopped`.
+2. Verify the `🟢 running` path against a live `vanilla` instance after next boot.
+3. Streamline invocation — currently `bash mcstatus.sh` from the script directory; should
+   be callable from anywhere (symlink into `PATH`, or install to `/usr/local/bin/`).
+4. Profile for agentic compatibility — consider a `--yaml` flag for machine-readable output
+   so an agent can parse fleet state without screen-scraping emoji columns.
 
 ---
 
