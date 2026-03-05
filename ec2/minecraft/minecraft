@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# minecraft — admin wrapper for minecraft-*.service units on this host
+# Installed to /home/ec2-user/bin/minecraft by setup.sh
+#
+# Usage: minecraft <subcommand> [instance] [--yaml]
+#
+# Subcommands:
+#   status [instance] [--yaml]   Show status of all servers, or one specific server
+#   start  [instance]            Start all servers, or one specific server
+#   stop   [instance]            Stop all servers, or one specific server
+#   screen <instance>            Attach to a running server's screen session
+#   reprovision                  Pull latest config and re-provision all servers
+
+set -euo pipefail
+
+# provision_servers.py lives in the repo cloned during UserData bootstrap
+PROVISION_SCRIPT="/home/ec2-user/AWS-Games/ec2/minecraft/provision_servers.py"
+
+
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
+
+# Emit one instance name per line (minecraft-<name>.service → <name>)
+_list_instances() {
+    systemctl list-unit-files --no-legend 'minecraft-*.service' 2>/dev/null \
+        | awk '{print $1}' \
+        | sed 's/^minecraft-//;s/\.service$//'
+}
+
+# Print a single human-readable status row for the given instance name
+_status_one() {
+    local unit="minecraft-${1}.service"
+    local status mark
+    # is-active exits non-zero for non-active states but still prints the state;
+    # || true captures that output without aborting under set -e
+    status=$(systemctl is-active "$unit" 2>/dev/null || true)
+    case "$status" in
+        active)   mark="🟢 running" ;;
+        inactive) mark="⚪ stopped" ;;
+        failed)   mark="🔴 FAILED"  ;;
+        *)        mark="❓ $status"  ;;
+    esac
+    printf "%-28s %s\n" "$unit" "$mark"
+}
+
+# Emit a YAML block for one instance (caller must print the 'servers:' header first)
+_status_one_yaml() {
+    local unit="minecraft-${1}.service"
+    local status
+    status=$(systemctl is-active "$unit" 2>/dev/null || true)
+    printf "  %s:\n" "$1"
+    printf "    unit: %s\n" "$unit"
+    printf "    status: %s\n" "$status"
+}
+
+
+# ------------------------------------------------------------------------------
+# Subcommand implementations
+# ------------------------------------------------------------------------------
+
+cmd_status() {
+    local yaml=false
+    local instance=""
+
+    for arg in "$@"; do
+        case "$arg" in
+            --yaml) yaml=true ;;
+            *)      instance="$arg" ;;
+        esac
+    done
+
+    if $yaml; then
+        printf "servers:\n"
+        if [[ -n "$instance" ]]; then
+            _status_one_yaml "$instance"
+        else
+            # Sort at the instance-name level so YAML block order is stable
+            _list_instances | sort | while read -r inst; do
+                _status_one_yaml "$inst"
+            done
+        fi
+    else
+        if [[ -n "$instance" ]]; then
+            _status_one "$instance"
+        else
+            _list_instances | while read -r inst; do
+                _status_one "$inst"
+            done | sort -k1
+        fi
+    fi
+}
+
+cmd_start() {
+    if [[ $# -gt 0 ]]; then
+        sudo systemctl start "minecraft-${1}.service"
+        echo "Started minecraft-${1}"
+    else
+        _list_instances | while read -r instance; do
+            echo "Starting minecraft-${instance}..."
+            sudo systemctl start "minecraft-${instance}.service"
+        done
+    fi
+}
+
+cmd_stop() {
+    if [[ $# -gt 0 ]]; then
+        sudo systemctl stop "minecraft-${1}.service"
+        echo "Stopped minecraft-${1}"
+    else
+        _list_instances | while read -r instance; do
+            echo "Stopping minecraft-${instance}..."
+            sudo systemctl stop "minecraft-${instance}.service"
+        done
+    fi
+}
+
+cmd_screen() {
+    if [[ $# -eq 0 ]]; then
+        echo "Usage: minecraft screen <instance>" >&2
+        exit 1
+    fi
+    local session="minecraft-${1}"
+    # screen -list exits 1 when no sessions exist; grep handles the match check
+    if ! screen -list 2>/dev/null | grep -q "$session"; then
+        echo "Error: no screen session '$session' found. Is the server running?" >&2
+        exit 1
+    fi
+    screen -r "$session"
+}
+
+cmd_reprovision() {
+    # Requires root; ec2-user has passwordless sudo on AL2023
+    sudo python3 "$PROVISION_SCRIPT" --update --provision
+}
+
+
+# ------------------------------------------------------------------------------
+# Dispatch
+# ------------------------------------------------------------------------------
+
+usage() {
+    cat >&2 <<'USAGE'
+Usage: minecraft <subcommand> [instance] [--yaml]
+
+Subcommands:
+  status [instance] [--yaml]   Show status of all servers, or one specific server
+  start  [instance]            Start all servers, or one specific server
+  stop   [instance]            Stop all servers, or one specific server
+  screen <instance>            Attach to a running server's screen session
+  reprovision                  Pull latest config and re-provision all servers
+USAGE
+    exit 1
+}
+
+[[ $# -eq 0 ]] && usage
+
+subcommand="$1"
+shift
+
+case "$subcommand" in
+    status)      cmd_status "$@" ;;
+    start)       cmd_start "$@" ;;
+    stop)        cmd_stop "$@" ;;
+    screen)      cmd_screen "$@" ;;
+    reprovision) cmd_reprovision ;;
+    *)           usage ;;
+esac

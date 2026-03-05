@@ -5,6 +5,18 @@ provide finer-grained detail; this log captures intent and trajectory.
 
 ---
 
+## 2026-03-05 — `minecraft` admin wrapper command
+
+- Added `ec2/minecraft/minecraft` — a `minecraft <subcommand>` wrapper for all common EC2 admin tasks, installed to `/home/ec2-user/bin/` by `setup.sh`
+- Subcommands: `status [instance] [--yaml]`, `start [instance]`, `stop [instance]`, `screen <instance>`, `reprovision`
+- `--yaml` flag on `status` emits machine-readable YAML for agent consumption
+- Added `ec2/minecraft/minecraft-completion.bash` — bash completion drop-in installed to `/etc/bash_completion.d/`; completes subcommands and instance names; suppresses `--yaml` once already present
+- Deleted `mcstatus.sh` — functionality fully absorbed into `minecraft status`; bug fixed in the process (`|| echo "unknown"` → `|| true` to prevent spurious output from `is-active` non-zero exit)
+- `setup.sh` installs both files at provision time; `mkdir -p /home/ec2-user/bin` ensures the directory exists on fresh instances
+- Verified on live instance: `minecraft status` (emoji table), `minecraft reprovision`
+
+---
+
 ## 2026-03-05 — Bug fix: eula.txt and server.properties ownership
 
 - `guarded_write_text` now accepts an `owner` parameter; when set, calls `chown <owner>:<owner>` after writing

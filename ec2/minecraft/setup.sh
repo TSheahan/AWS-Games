@@ -122,6 +122,16 @@ chown ec2-user:ec2-user "$jarPath"
 echo "!! Provision servers via provision_servers.py"
 python3 ec2/minecraft/provision_servers.py --update --provision
 
+echo "!! Install minecraft admin wrapper"
+mkdir -p /home/ec2-user/bin
+cp ec2/minecraft/minecraft /home/ec2-user/bin/minecraft
+chmod 0755 /home/ec2-user/bin/minecraft
+chown ec2-user:ec2-user /home/ec2-user/bin/minecraft
+
+echo "!! Install bash completion for minecraft command"
+cp ec2/minecraft/minecraft-completion.bash /etc/bash_completion.d/minecraft
+chmod 0644 /etc/bash_completion.d/minecraft
+
 # echo "!! start minecraft-server"
 # systemctl start minecraft-server.service
 # ? consider rebooting here..

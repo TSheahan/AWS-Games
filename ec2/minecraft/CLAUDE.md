@@ -49,6 +49,13 @@ Generates per-server files under `/mnt/persist/minecraft/<folder>/` and systemd 
 
 ---
 
-## `mcstatus.sh`
+## `minecraft` admin wrapper
 
-Quick status display for all `minecraft-*.service` units. Runs on EC2 as any user.
+Installed by `setup.sh` to `/home/ec2-user/bin/minecraft` (on PATH). Bash completion
+drop-in installed to `/etc/bash_completion.d/minecraft`.
+
+**Subcommands:** `status [instance] [--yaml]`, `start [instance]`, `stop [instance]`,
+`screen <instance>`, `reprovision`
+
+`status` without `--yaml` prints an emoji-annotated table. `--yaml` emits machine-readable
+output suitable for agent consumption. `reprovision` calls `provision_servers.py` via sudo.
