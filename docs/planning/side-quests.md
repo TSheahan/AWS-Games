@@ -50,36 +50,53 @@ scriptable as-is.
 
 ---
 
-## Systemd service status shortcut
+## `minecraft` admin wrapper command
 
-**Pain point:** No ergonomic shortcut to surface the health of all `minecraft-*` systemd
-units at a glance from the server prompt.
+**Vision:** A single `minecraft` command on the EC2 instance that wraps all common admin
+operations, with bash autocomplete support. Installed into ec2-user's PATH at provision time.
 
-**Current state — `ec2/minecraft/mcstatus.sh` reviewed (2026-03-05):**
-
-Script iterates `systemctl list-unit-files --no-legend 'minecraft-*.service'` and calls
-`systemctl is-active` per unit. Has a bug: `is-active` exits non-zero for inactive services,
-so `|| echo "unknown"` fires — both the real status text and "unknown" are captured in the
-same command substitution, producing malformed output (`❓ inactive` line + a dangling
-`unknown` line per unit). Fix: replace `|| echo "unknown"` with `|| true` and a separate
-empty-check.
-
-Observed on first boot (all servers inactive as expected — `vanilla` configured to
-auto-start on next boot, not this one):
-
+**Subcommand surface (target):**
 ```
-minecraft-famine.service     ❓ inactive    ← should be ⚪ stopped
-minecraft-vanilla.service    ❓ inactive    ← ditto
-unknown                                     ← spurious, one per unit
+minecraft status [--yaml]
+minecraft status <instance> [--yaml]
+minecraft stop
+minecraft stop <instance>
+minecraft start
+minecraft start <instance>
+minecraft screen <instance>
+minecraft reprovision
 ```
 
-**Next steps:**
-1. Fix the `|| echo "unknown"` bug so inactive services render as `⚪ stopped`.
-2. Verify the `🟢 running` path against a live `vanilla` instance after next boot.
-3. Streamline invocation — currently `bash mcstatus.sh` from the script directory; should
-   be callable from anywhere (symlink into `PATH`, or install to `/usr/local/bin/`).
-4. Profile for agentic compatibility — consider a `--yaml` flag for machine-readable output
-   so an agent can parse fleet state without screen-scraping emoji columns.
+**Implementation notes:**
+- `status` implemented inline in the wrapper (absorbs and fixes `mcstatus.sh` logic)
+- Other subcommands call out to existing generated scripts / systemctl
+- Install to `/home/ec2-user/bin/minecraft` (on PATH already; `setup.sh` must `mkdir -p` it first)
+- `setup.sh` handles installation so the command is available from first login
+- Bash autocomplete via a completion script — research needed on the right mechanism for
+  AL2023 (likely a `/etc/bash_completion.d/` drop-in or `~/.bash_completion`)
+
+**`mcstatus.sh` bug (pre-existing, absorbed into wrapper):**
+Script calls `systemctl is-active` per unit. `is-active` exits non-zero for inactive
+services, so `|| echo "unknown"` fires inside the command substitution — producing both
+the real status text and a spurious `unknown` line per inactive unit. Fix: `|| true` +
+separate empty-check.
+
+**PATH research (ec2-user, 2026-03-05):**
+- `echo $PATH` → `/home/ec2-user/.local/bin:/home/ec2-user/bin:/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin`
+- `/home/ec2-user/bin` is on PATH but does not exist yet — `setup.sh` must create it
+- `/home/ec2-user/.local/bin` also absent; skip for now, `/home/ec2-user/bin` is sufficient
+- Prefer ec2-user ownership over `/usr/local/bin` (no sudo needed to update)
+
+**Resolved design decisions:**
+- Bash completion: `/etc/bash_completion.d/minecraft` drop-in written by `setup.sh` (root context; system-wide; sourced automatically)
+- `reprovision` and `start`/`stop`: use `sudo`; ec2-user has passwordless sudo on AL2023 so no sudoers entry needed
+- `screen <instance>`: guards against no active session with a clear error message
+- Wrapper is in `ec2/minecraft/minecraft`; completion in `ec2/minecraft/minecraft-completion.bash`; both installed by `setup.sh`
+
+**Still to verify on next live instance:**
+- Completion fires correctly after boot (bash-completion package present and sources `/etc/bash_completion.d/`)
+- `🟢 running` status path for a live `vanilla` instance
+- `minecraft screen vanilla` attaches cleanly
 
 ---
 
