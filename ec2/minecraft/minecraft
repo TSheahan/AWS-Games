@@ -25,6 +25,7 @@ PROVISION_SCRIPT="/home/ec2-user/AWS-Games/ec2/minecraft/provision_servers.py"
 _list_instances() {
     systemctl list-unit-files --no-legend 'minecraft-*.service' 2>/dev/null \
         | awk '{print $1}' \
+        | grep -v '^minecraft-autoshutdown\.service$' \
         | sed 's/^minecraft-//;s/\.service$//'
 }
 
