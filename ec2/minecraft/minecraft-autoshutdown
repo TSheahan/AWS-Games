@@ -55,8 +55,12 @@ $dry_run && echo "DRY RUN — shutdown will not be executed."
 
 uptime_seconds=$(awk '{print int($1)}' /proc/uptime)
 if [[ $uptime_seconds -lt $MIN_UPTIME ]]; then
-    echo "Instance uptime ${uptime_seconds}s < ${MIN_UPTIME}s minimum (3 hours) — skipping idle check."
-    exit 0
+    if $dry_run; then
+        echo "Instance uptime ${uptime_seconds}s < ${MIN_UPTIME}s minimum — DRY RUN: continuing anyway."
+    else
+        echo "Instance uptime ${uptime_seconds}s < ${MIN_UPTIME}s minimum (3 hours) — skipping idle check."
+        exit 0
+    fi
 fi
 echo "Instance uptime: ${uptime_seconds}s"
 
