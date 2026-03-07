@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically check whether idle Minecraft servers warrant instance shutdown
+
+[Timer]
+OnBootSec=30min
+OnUnitActiveSec=30min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

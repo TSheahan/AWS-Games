@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# minecraft-autoshutdown — idle-based EC2 instance shutdown
+# Installed to /usr/local/bin/minecraft-autoshutdown by setup.sh
+# Run by minecraft-autoshutdown.timer every 30 minutes.
+#
+# Shuts down the instance via 'shutdown -h now' when all provisioned
+# Minecraft servers have been idle for at least one check cycle.
+# The OS shutdown triggers systemd's orderly stop sequence, which
+# invokes the per-server stop-minecraft.sh with its built-in warnings.
+
+set -euo pipefail
+
+
+# --- Constants ---
+
+# Stable pause signal written to the console log when a server empties
+PAUSE_STRING="Server empty for 60 seconds, pausing"
+
+# Signal written to the console log when a player connects
+JOIN_STRING="joined the game"
+
+# Number of lines to inspect from the tail of each console log
+TAIL_LINES=40
+
+# Minimum instance uptime in seconds before idle checks run (3 hours)
+MIN_UPTIME=10800
+
+
+# --- Helpers ---
+
+# Emit one instance name per line (minecraft-<name>.service → <name>)
+_list_instances() {
+    systemctl list-unit-files --no-legend 'minecraft-*.service' 2>/dev/null \
+        | awk '{print $1}' \
+        | sed 's/^minecraft-//;s/\.service$//'
+}
+
+
+echo "=== minecraft-autoshutdown run at $(date '+%Y-%m-%d_%H-%M-%S') ==="
+
+
+# --- Global guard: uptime ---
+
+uptime_seconds=$(awk '{print int($1)}' /proc/uptime)
+if [[ $uptime_seconds -lt $MIN_UPTIME ]]; then
+    echo "Instance uptime ${uptime_seconds}s < ${MIN_UPTIME}s minimum (3 hours) — skipping idle check."
+    exit 0
+fi
+echo "Instance uptime: ${uptime_seconds}s"
+
+
+# --- Global guard: discover instances ---
+
+mapfile -t instances < <(_list_instances)
+if [[ ${#instances[@]} -eq 0 ]]; then
+    echo "No minecraft-*.service unit files found — nothing to assess."
+    exit 0
+fi
+echo "Instances found: ${instances[*]}"
+
+
+# --- Per-server verdict loop ---
+# Every server is evaluated and logged regardless of earlier verdicts.
+# This produces a complete audit record for each run.
+
+all_idle=true
+
+for instance in "${instances[@]}"; do
+    unit="minecraft-${instance}.service"
+    echo "--- Checking $unit ---"
+
+    # Service state check
+    service_status=$(systemctl is-active "$unit" 2>/dev/null || true)
+    echo "  Status: $service_status"
+
+    if [[ "$service_status" != "active" ]]; then
+        echo "  Verdict: IDLE (service not running)"
+        continue
+    fi
+
+    # Resolve the server's working directory from its unit
+    work_dir=$(systemctl show "$unit" --property=WorkingDirectory --value 2>/dev/null || true)
+    if [[ -z "$work_dir" ]]; then
+        echo "  WARNING: WorkingDirectory is empty for $unit — verdict: NOT IDLE"
+        all_idle=false
+        continue
+    fi
+    echo "  WorkingDirectory: $work_dir"
+
+    # Locate the most recent console log (name sort is chronological given the timestamp format)
+    latest_log=$(ls "${work_dir}"/console_*.log 2>/dev/null | sort | tail -1 || true)
+    if [[ -z "$latest_log" ]]; then
+        echo "  WARNING: No console_*.log found in $work_dir — verdict: NOT IDLE"
+        all_idle=false
+        continue
+    fi
+    echo "  Log file: $latest_log"
+
+    # Read the tail of the log and search for the idle signal
+    tail_content=$(tail -n "$TAIL_LINES" "$latest_log" 2>/dev/null || true)
+
+    # Find the line number of the last pause signal within the tail (grep -n for numbered output)
+    last_pause_linenum=$(echo "$tail_content" | grep -n "$PAUSE_STRING" | tail -1 | cut -d: -f1 || true)
+
+    if [[ -z "$last_pause_linenum" ]]; then
+        echo "  Verdict: NOT IDLE (no pause signal in last $TAIL_LINES lines)"
+        all_idle=false
+        continue
+    fi
+
+    # Extract all lines that follow the last pause line
+    lines_after_pause=$(echo "$tail_content" | tail -n +"$((last_pause_linenum + 1))")
+
+    # If a player joined after the last pause, the server is not idle
+    if echo "$lines_after_pause" | grep -q "$JOIN_STRING"; then
+        echo "  Verdict: NOT IDLE (player joined after last pause)"
+        all_idle=false
+        continue
+    fi
+
+    # Server is idle; warn if unexpected log lines appeared after the pause
+    # (pause is present but neither the last line nor followed by a join)
+    if [[ -n "$lines_after_pause" ]]; then
+        echo "  WARNING: Pause signal followed by unrecognised log lines (no join detected) — verdict: IDLE"
+    else
+        echo "  Verdict: IDLE (server paused, no subsequent activity)"
+    fi
+done
+
+
+# --- Shutdown decision ---
+
+if $all_idle; then
+    echo "All servers idle — initiating shutdown."
+    shutdown -h now
+else
+    echo "Not all servers idle — no action taken."
+    exit 0
+fi

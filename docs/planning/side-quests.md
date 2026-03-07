@@ -5,6 +5,33 @@ distinct value in the solving. Pick up opportunistically.
 
 ---
 
+## Workstation instance/stack control interface
+
+**Pain point:** After a stack reinstall, any hardcoded instance ID becomes stale —
+including OS shortcuts (Windows `.lnk` Target fields) used to start/stop the instance.
+The user must manually look up the new ID before any direct AWS CLI invocation works.
+
+**Root fix — dynamic lookup wrapper** (`bin/instance.py` or `bin/stack.py`):
+Resolves the current `GameStack-*` instance ID at call time, never storing it. Shortcuts
+point at the wrapper, so they survive reinstalls without modification.
+
+Proposed operations:
+- `start` / `stop` / `reboot` — maps to `ec2 start/stop/reboot-instances`
+- `status` — instance state, public IP, uptime
+- `ssh` — opens an SSH session using the current EIP output from the stack
+
+**Interim / complementary — post-deploy output from `reinstall_stack.py`:**
+At `CREATE_COMPLETE`, print ready-to-use shortcut Target strings alongside the existing
+stack outputs. Gives the user copy-pasteable correct values immediately after a reinstall,
+reducing the window where stale IDs cause confusion even before the wrapper exists.
+
+**Design considerations:**
+- Instance ID is derived from stack resources at call time, never stored or cached
+- Reuse the stack-discovery logic already present in `reinstall_stack.py`
+- `--profile` passthrough consistent with existing `bin/` tooling
+
+---
+
 ## Enhanced /usage view
 
 **Pain point:** `/usage` shows current consumption but gives no sense of how far the weekly
@@ -37,16 +64,31 @@ scriptable as-is.
 
 ---
 
-## Persistent Elastic IP across stack rebuilds
+## Persistent EIP + EBS stack
 
-**Pain point:** The EIP is currently owned by the CloudFormation stack. When the stack is deleted and recreated, the public IP changes — players need to be told the new address, and any DNS or saved server entries break.
+**Pain point:** The EIP and EBS volume are owned by the game stack. Every reinstall
+destroys and recreates both — players lose their saved server address, and the volume
+survives only via `DeletionPolicy: Retain` as a safety net, not intentional design.
 
-**Approach:** Allocate the EIP once outside CloudFormation as a standalone resource (a manual `aws ec2 allocate-address` or a separate single-resource stack with `DeletionPolicy: Retain`). Pass the Allocation ID into the game stack as a parameter and use `AWS::EC2::EIPAssociation` instead of `AWS::EC2::EIP`. The EIP survives stack deletion; the instance just re-associates on each new deploy.
+**Designed approach:** A separate `GamePersistentStack` (fixed default, overridable via
+`GAME_PERSISTENT_STACK` env var) owns both `AWS::EC2::EIP` and `AWS::EC2::Volume` with
+`DeletionPolicy: Retain`. The game stack becomes fully stateless and ephemeral:
 
-**Design questions:**
-- One-off manual allocation or a minimal "persistent resources" stack that holds both the EIP and the EBS volume? A shared persistent stack is cleaner if the pattern is repeated.
-- `reinstall_stack.py` already handles `ExistingVolumeId` as a pass-through parameter — `ExistingAllocationId` would follow the same pattern with the same reuse logic.
-- Does this warrant a corresponding `GAME_EXISTING_ALLOCATION_ID` env var, or is CLI-only sufficient?
+- `AWS::EC2::EIPAssociation` replaces `AWS::EC2::EIP` in the game stack
+- `VolumeId` and `AllocationId` are required parameters, sourced from persistent stack outputs
+- `reinstall_stack.py` discovers the persistent stack at startup and passes those values in
+- `NewVolume` / `CreateNewVolume` condition removed from game stack (hard cutover)
+
+**Resizing EBS:** Change `VolumeSize` parameter on the persistent stack → `update-stack` →
+CloudFormation issues `ModifyVolume` online (no replacement, no detach).
+
+**First-time setup** — `bin/setup_persistent_stack.py`:
+- **Create mode** (no existing resources): standard `create_stack`
+- **Import mode** (`--import-volume-id` / `--import-allocation-id`): adopts orphaned
+  resources via `create-change-set --change-set-type IMPORT`; reads actual properties
+  via `describe_volumes` / `describe_addresses` to match template parameters
+
+Plan on file: `~/.claude/plans/lexical-cuddling-creek.md`
 
 ---
 
@@ -58,6 +100,77 @@ Implemented and partially verified. Confirm on next session with a running serve
 - `minecraft status --yaml` output is well-formed
 - `minecraft status <instance>` for a running server shows `🟢 running`
 - `minecraft screen <instance>` attaches cleanly
+
+---
+
+## `minecraft-autoshutdown` — operational convenience
+
+**Background:** `minecraft-autoshutdown` runs on a 30-minute timer and shuts the instance
+down when all servers are idle. Several convenience gaps exist across the script and tooling.
+
+**`minecraft autoshutdown` subcommand:**
+Add to the `minecraft` wrapper, eliminating raw systemctl/journalctl invocations:
+
+- `status` — timer enabled/active state, next trigger time, last run exit code; align
+  visually with the emoji+table format of `minecraft status`
+- `logs [N]` — last N runs from journald (`journalctl -u minecraft-autoshutdown.service`);
+  default to enough lines to cover ~3 full runs; each run is already delimited by the
+  `=== minecraft-autoshutdown run at ... ===` header the script emits
+- `run` — manual one-shot trigger without affecting the timer schedule
+  (`sudo /usr/local/bin/minecraft-autoshutdown`)
+- `disable` / `enable` — toggle the timer
+  (`systemctl disable/enable --now minecraft-autoshutdown.timer`)
+
+**Dry-run flag in the script:**
+Add `--dry-run` to evaluate idle state and log the per-server verdict without executing
+`shutdown -h now`. Primary use: verify detection logic on a live instance after deploy or
+config change without risk. `minecraft autoshutdown run --dry-run` would be the ergonomic
+entry point.
+
+**Bash completion extension:**
+Add `autoshutdown` (with its subcommands and `--dry-run`) to `minecraft-completion.bash`.
+
+**Open design questions:**
+- `minecraft autoshutdown status`: surface both last-trigger and next-trigger, or just
+  next-trigger alongside exit code?
+- `logs N`: line count or run count? Run count is more intuitive but requires parsing the
+  delimiter header to slice correctly.
+
+---
+
+## `minecraft` wrapper — transparent operation mode
+
+**Goal:** Surface the underlying commands and files the wrapper touches as it runs. A user
+who runs `minecraft start vanilla` should be able to see that it ran
+`systemctl start minecraft-vanilla.service` — and gradually build intuition for the raw
+operations behind the convenience layer. This expresses a broader preference for tooling
+that teaches rather than conceals.
+
+**Approach:** A `--verbose` flag (or `MINECRAFT_VERBOSE=1` env var) that, before each
+significant operation, prints the command about to be run. Consistent prefix keeps it
+scannable and visually distinct from normal output:
+
+```
+[cmd] systemctl start minecraft-vanilla.service
+[cmd] journalctl -u minecraft-autoshutdown.service -n 200
+[file] /mnt/persist/minecraft/vanilla/console_2026-03-06_08-00-00.log
+```
+
+**Coverage across subcommands:**
+- `start` / `stop` — the `systemctl` call for each unit
+- `status` — `systemctl is-active` per unit; `systemctl list-unit-files` for discovery
+- `screen` — the `screen -r` invocation and session name checked
+- `reprovision` — the `python3 provision_servers.py` call with its flags
+- `autoshutdown status` / `logs` / `run` — the underlying `systemctl` and `journalctl`
+  calls; for `run`, also the log file and working directory resolved per server
+
+**Scope question:** Apply only to the `minecraft` wrapper, or also instrument
+`minecraft-autoshutdown` itself (e.g. emit `[file]` lines for the console log it reads)?
+The autoshutdown script already logs its working directory and log file selections — a
+`--verbose` pass-through from `minecraft autoshutdown run --verbose` could enable extra
+detail there too.
+
+**Bash completion:** `--verbose` should complete alongside existing flags.
 
 ---
 

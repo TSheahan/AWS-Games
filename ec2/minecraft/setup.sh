@@ -132,6 +132,20 @@ echo "!! Install bash completion for minecraft command"
 cp ec2/minecraft/minecraft-completion.bash /etc/bash_completion.d/minecraft
 chmod 0644 /etc/bash_completion.d/minecraft
 
+echo "!! Install minecraft-autoshutdown script"
+cp ec2/minecraft/minecraft-autoshutdown /usr/local/bin/minecraft-autoshutdown
+chmod 0755 /usr/local/bin/minecraft-autoshutdown
+
+echo "!! Install minecraft-autoshutdown systemd units"
+cp ec2/minecraft/minecraft-autoshutdown.timer /etc/systemd/system/minecraft-autoshutdown.timer
+cp ec2/minecraft/minecraft-autoshutdown.service /etc/systemd/system/minecraft-autoshutdown.service
+chmod 0644 /etc/systemd/system/minecraft-autoshutdown.timer
+chmod 0644 /etc/systemd/system/minecraft-autoshutdown.service
+
+echo "!! Enable and start minecraft-autoshutdown timer"
+systemctl daemon-reload
+systemctl enable --now minecraft-autoshutdown.timer
+
 # echo "!! start minecraft-server"
 # systemctl start minecraft-server.service
 # ? consider rebooting here..
