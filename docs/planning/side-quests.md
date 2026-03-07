@@ -103,29 +103,23 @@ Implemented and partially verified. Confirm on next session with a running serve
 
 ---
 
-## `minecraft-autoshutdown` — operational convenience
+## `minecraft autoshutdown` subcommand
 
-**Background:** `minecraft-autoshutdown` runs on a 30-minute timer and shuts the instance
-down when all servers are idle. Several convenience gaps exist across the script and tooling.
+**Background:** `minecraft-autoshutdown` (script + systemd timer, `--dry-run` supported)
+is deployed and validated. The raw operations are still invoked directly via `systemctl`
+and `journalctl`. Add a `minecraft autoshutdown` subcommand to the wrapper to eliminate
+that.
 
-**`minecraft autoshutdown` subcommand:**
-Add to the `minecraft` wrapper, eliminating raw systemctl/journalctl invocations:
-
+**Subcommands:**
 - `status` — timer enabled/active state, next trigger time, last run exit code; align
   visually with the emoji+table format of `minecraft status`
-- `logs [N]` — last N runs from journald (`journalctl -u minecraft-autoshutdown.service`);
-  default to enough lines to cover ~3 full runs; each run is already delimited by the
+- `logs [N]` — last N *runs* from journald (`journalctl -u minecraft-autoshutdown.service`);
+  default to enough to cover ~3 full runs; each run is delimited by the
   `=== minecraft-autoshutdown run at ... ===` header the script emits
-- `run` — manual one-shot trigger without affecting the timer schedule
+- `run [--dry-run]` — manual one-shot trigger without affecting the timer schedule
   (`sudo /usr/local/bin/minecraft-autoshutdown`)
 - `disable` / `enable` — toggle the timer
   (`systemctl disable/enable --now minecraft-autoshutdown.timer`)
-
-**Dry-run flag in the script:**
-Add `--dry-run` to evaluate idle state and log the per-server verdict without executing
-`shutdown -h now`. Primary use: verify detection logic on a live instance after deploy or
-config change without risk. `minecraft autoshutdown run --dry-run` would be the ergonomic
-entry point.
 
 **Bash completion extension:**
 Add `autoshutdown` (with its subcommands and `--dry-run`) to `minecraft-completion.bash`.
@@ -133,8 +127,8 @@ Add `autoshutdown` (with its subcommands and `--dry-run`) to `minecraft-completi
 **Open design questions:**
 - `minecraft autoshutdown status`: surface both last-trigger and next-trigger, or just
   next-trigger alongside exit code?
-- `logs N`: line count or run count? Run count is more intuitive but requires parsing the
-  delimiter header to slice correctly.
+- `logs N`: run count confirmed as the right unit — requires parsing the delimiter header
+  to slice correctly.
 
 ---
 

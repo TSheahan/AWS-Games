@@ -5,6 +5,30 @@ provide finer-grained detail; this log captures intent and trajectory.
 
 ---
 
+## 2026-03-08 — `minecraft-autoshutdown` idle-shutdown service
+
+- Added `ec2/minecraft/minecraft-autoshutdown` — shuts down the EC2 instance when all
+  provisioned Minecraft servers have been idle for at least one 30-minute check cycle
+- Idle detection reads the tail of each server's console log: a `"Server empty for 60
+  seconds, pausing"` signal with no subsequent `"joined the game"` entry → IDLE; absent
+  pause signal or join after pause → NOT IDLE. All servers must be idle to trigger shutdown.
+- Global uptime guard: skips idle checks for the first 3 hours after boot to prevent
+  premature shutdown during startup and provisioning
+- Added `minecraft-autoshutdown.service` (oneshot) and `minecraft-autoshutdown.timer`
+  (30-minute schedule, `OnBootSec=30min`); `setup.sh` installs all three and enables the
+  timer at provision time
+- Added `--dry-run` flag: runs full detection logic and logs per-server verdicts without
+  executing `shutdown -h now`; uptime guard is bypassed in dry-run mode so the full check
+  can be exercised on a fresh instance
+- Bug fix: `_list_instances()` in both `minecraft-autoshutdown` and the `minecraft` wrapper
+  excluded `minecraft-autoshutdown.service` from the `minecraft-*.service` glob — without
+  this, the service would classify itself as NOT IDLE (active, no WorkingDirectory) and
+  block every timer-triggered shutdown
+- Validated on live instance: all three detection paths confirmed (`IDLE`, `NOT IDLE —
+  player joined`, `NOT IDLE — no pause signal in tail`)
+
+---
+
 ## 2026-03-05 — `minecraft` admin wrapper command
 
 - Added `ec2/minecraft/minecraft` — a `minecraft <subcommand>` wrapper for all common EC2 admin tasks, installed to `/home/ec2-user/bin/` by `setup.sh`
