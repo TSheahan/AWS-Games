@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Minimal Lambda + Function URL control API for game server start/stop.
+  Intended for invocation from mobile home screen shortcuts.
+  Survives game server stack reinstalls — deploy and update in place; do not delete.
+
+Parameters:
+  ApiKey:
+    Type: String
+    NoEcho: true
+    Description: >
+      Secret key required in the ?key= query parameter on all requests.
+      Scoped to game instance start/stop only — not a privileged credential.
+      Changing this value and redeploying immediately revokes the old key.
+
+Resources:
+
+  ControlApiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: GameControlApiLambdaRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      # CloudWatch Logs only — no S3, no VPC, no X-Ray
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: GameControlApiPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: FindGameStack
+                Effect: Allow
+                Action:
+                  - cloudformation:ListStacks
+                  - cloudformation:DescribeStackResource
+                Resource: "*"
+              - Sid: ControlGameInstance
+                Effect: Allow
+                Action:
+                  - ec2:StartInstances
+                  - ec2:StopInstances
+                Resource: "*"
+
+  ControlApiFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: GameControlApi
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt ControlApiRole.Arn
+      Timeout: 30
+      Environment:
+        Variables:
+          API_KEY: !Ref ApiKey
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import boto3
+
+          REGION = "ap-southeast-4"
+          STACK_PREFIX = "GameStack"
+          ACTIVE_STATES = {"CREATE_COMPLETE", "UPDATE_COMPLETE"}
+
+
+          def find_active_stack(cf):
+              """Return the name of the single active GameStack, or raise if 0 or >1."""
+              paginator = cf.get_paginator("list_stacks")
+              matching = []
+              for page in paginator.paginate(StackStatusFilter=list(ACTIVE_STATES)):
+                  for stack in page.get("StackSummaries", []):
+                      if stack["StackName"].startswith(STACK_PREFIX):
+                          matching.append(stack["StackName"])
+              if len(matching) != 1:
+                  raise RuntimeError(
+                      f"Expected 1 active GameStack, found {len(matching)}: {matching}"
+                  )
+              return matching[0]
+
+
+          def get_instance_id(cf, stack_name):
+              """Resolve the EC2 instance ID from the CloudFormation stack resource."""
+              response = cf.describe_stack_resource(
+                  StackName=stack_name,
+                  LogicalResourceId="ServerInstance",
+              )
+              return response["StackResourceDetail"]["PhysicalResourceId"]
+
+
+          def handler(event, context):
+              api_key = os.environ["API_KEY"]
+              params = event.get("queryStringParameters") or {}
+
+              # Validate API key before doing anything else
+              if params.get("key") != api_key:
+                  return {
+                      "statusCode": 403,
+                      "headers": {"Content-Type": "application/json"},
+                      "body": json.dumps({"error": "forbidden"}),
+                  }
+
+              action = params.get("action", "").lower()
+              if action not in ("start", "stop"):
+                  return {
+                      "statusCode": 400,
+                      "headers": {"Content-Type": "application/json"},
+                      "body": json.dumps({"error": "action must be 'start' or 'stop'"}),
+                  }
+
+              cf = boto3.client("cloudformation", region_name=REGION)
+              ec2 = boto3.client("ec2", region_name=REGION)
+
+              try:
+                  stack_name = find_active_stack(cf)
+                  instance_id = get_instance_id(cf, stack_name)
+
+                  if action == "start":
+                      result = ec2.start_instances(InstanceIds=[instance_id])
+                      state = result["StartingInstances"][0]["CurrentState"]["Name"]
+                  else:
+                      result = ec2.stop_instances(InstanceIds=[instance_id])
+                      state = result["StoppingInstances"][0]["CurrentState"]["Name"]
+
+                  return {
+                      "statusCode": 200,
+                      "headers": {"Content-Type": "application/json"},
+                      "body": json.dumps({
+                          "action": action,
+                          "instance_id": instance_id,
+                          "state": state,
+                      }),
+                  }
+
+              except Exception as e:
+                  return {
+                      "statusCode": 500,
+                      "headers": {"Content-Type": "application/json"},
+                      "body": json.dumps({"error": str(e)}),
+                  }
+
+  ControlApiFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !Ref ControlApiFunction
+      AuthType: NONE
+
+  # Required to allow unauthenticated (key-gated) public invocation of the Function URL
+  ControlApiFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ControlApiFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: "*"
+      FunctionUrlAuthType: NONE
+
+Outputs:
+  FunctionUrl:
+    Description: >
+      Base URL for the control API. Append ?action=start&key=<key> or
+      ?action=stop&key=<key> to form the full shortcut URLs.
+    Value: !GetAtt ControlApiFunctionUrl.FunctionUrl

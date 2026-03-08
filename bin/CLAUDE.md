@@ -62,6 +62,32 @@ IP — stable across stop/start cycles.
 
 ---
 
+## `deploy_control_api.py`
+
+Deploys or updates the `GameControlApi` CloudFormation stack, which exposes a Lambda Function
+URL for game server start/stop from mobile home screen shortcuts.
+
+**Runs on:** developer workstation
+**AWS auth:** standard boto3 credential chain; `--profile` overrides the profile name
+**Template:** `../cloudformation_control_api_stack.yaml` (relative to `bin/`)
+**Stack name:** `GameControlApi` — fixed, not timestamped; updated in place across redeploys
+
+This stack is independent of and outlives the game server stack. Do not delete it during game
+server reinstalls.
+
+Key behaviours:
+- Detects existing stack → `update_stack` if present, `create_stack` if not
+- `update_stack` handles the "No updates are to be performed" no-op case cleanly
+- Safe by default: `--execute` required to write state; dry run reports `operation` and `stack_name`
+- `--api-key` accepts the key on the CLI; omit it to be prompted via `getpass` (input hidden)
+- The API key is **never logged** — omitted from all parameter summary output
+- On success: prints YAML with stack outputs and logs the two shortcut URLs (with `<your-key>` placeholder)
+
+**API key scope:** game instance start/stop only — not a privileged credential. Revoke by
+changing the `ApiKey` CF parameter and redeploying.
+
+---
+
 ## Python conventions
 
 - Dependencies: `boto3`, `pyyaml`, `botocore` (see `requirements.txt` in repo root)

@@ -70,14 +70,27 @@ scriptable as-is.
 destroys and recreates both — players lose their saved server address, and the volume
 survives only via `DeletionPolicy: Retain` as a safety net, not intentional design.
 
-**Designed approach:** A separate `GamePersistentStack` (fixed default, overridable via
-`GAME_PERSISTENT_STACK` env var) owns both `AWS::EC2::EIP` and `AWS::EC2::Volume` with
-`DeletionPolicy: Retain`. The game stack becomes fully stateless and ephemeral:
+**Designed approach:** A separate `GamePersistentStack` (fixed name) owns both
+`AWS::EC2::EIP` and `AWS::EC2::Volume` with `DeletionPolicy: Retain`. The game stack
+becomes fully stateless and ephemeral:
 
 - `AWS::EC2::EIPAssociation` replaces `AWS::EC2::EIP` in the game stack
-- `VolumeId` and `AllocationId` are required parameters, sourced from persistent stack outputs
-- `reinstall_stack.py` discovers the persistent stack at startup and passes those values in
+- `VolumeId` and `AllocationId` sourced via `Fn::ImportValue` from persistent stack exports
+- `reinstall_stack.py` no longer needs to discover or pass these values — the template
+  handles the dependency
 - `NewVolume` / `CreateNewVolume` condition removed from game stack (hard cutover)
+
+**Intentional hard CF dependency:** The game server stack importing from the persistent
+stack via `Fn::ImportValue` means CloudFormation will block deletion of the persistent
+stack while the game server stack exists. This is the desired protection — the persistent
+stack cannot be accidentally torn down mid-session. The dependency releases when the game
+server stack is deleted during a reinstall, at which point the persistent stack's exports
+are free again for the new game server stack to import.
+
+This is the architectural inverse of the control API pattern: the control API uses dynamic
+lookup to *avoid* a hard dependency on the ephemeral game server stack. Here, a hard
+dependency is exactly right because the persistent stack must outlive any number of game
+server reinstalls.
 
 **Resizing EBS:** Change `VolumeSize` parameter on the persistent stack → `update-stack` →
 CloudFormation issues `ModifyVolume` online (no replacement, no detach).
