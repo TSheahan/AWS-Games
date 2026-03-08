@@ -4,6 +4,68 @@ Description: >
   Intended for invocation from mobile home screen shortcuts.
   Survives game server stack reinstalls — deploy and update in place; do not delete.
 
+Metadata:
+  RegionalWorkaround: |
+    THIS STACK DEPLOYS TO ap-southeast-2 (Sydney), NOT ap-southeast-4 (Melbourne).
+
+    Reason: AWS::Lambda::Url is not available in ap-southeast-4 (as of 2026-03).
+    Sydney is an older region with full Lambda Function URL support.
+
+    Cross-region operation: the Lambda function is hosted in Sydney but its boto3
+    clients target ap-southeast-4 explicitly (REGION constant in the function code).
+    EC2 start/stop and CloudFormation stack lookup both operate against Melbourne.
+    Cross-region API calls are standard AWS behaviour — no special configuration needed.
+
+    Migration path back to Melbourne: when AWS::Lambda::Url becomes available in
+    ap-southeast-4, change REGION in deploy_control_api.py to ap-southeast-4 and
+    redeploy. The Lambda code requires no changes (it already targets ap-southeast-4
+    for its EC2 and CF clients). Delete the Sydney stack after confirming the Melbourne
+    stack is healthy. Both ControlApiFunctionUrlPermission and
+    ControlApiInvokeFunctionPermission must be present in the migrated template —
+    the two-permission requirement (see below) applies in all regions.
+
+    Two-permission requirement (October 2025 change): new Function URLs require both
+    lambda:InvokeFunctionUrl AND lambda:InvokeFunction in the resource-based policy.
+    This was the root cause of all 403 Forbidden failures observed during development
+    across us-east-1, ap-southeast-2, and ap-southeast-4. Both permissions are present
+    in this template.
+
+
+  SecurityModel: |
+    AUTH DESIGN — CAPABILITY URL PATTERN
+
+    The API key is carried in the URL query string (?key=<value>) by deliberate design,
+    not as a workaround forced by browser limitations. The bookmark IS the credential:
+    tapping it authenticates and acts in a single gesture. This is the capability URL
+    pattern — a URL that confers the right to perform an action by virtue of being
+    possessed. The security model is "keep the URL secret" rather than "authenticate
+    the caller."
+
+    This choice is internally consistent with the UX requirement (one-tap home screen
+    shortcut, no intermediate login step) and is appropriate given the threat model:
+    personal device with screen lock, key scoped to instance start/stop only, no access
+    to data or configuration.
+
+    API Gateway's native API key management (AWS::ApiGateway::ApiKey + UsagePlan) solves
+    a different problem: authenticating a known caller via a header that the gateway
+    validates before Lambda is invoked. It is architecturally cleaner for server-to-server
+    or app-to-API use cases, but it requires the key in the x-api-key header — which a
+    browser navigating to a bookmarked URL cannot supply. It would eliminate the one-tap
+    UX entirely. It is not a superior solution to this problem; it is a solution to a
+    different problem.
+
+    The "looser disclosure profile" accepted at design time reflects this scoping: the
+    key's blast radius is bounded (start/stop only), the device context is personal, and
+    the capability URL pattern is a legitimate, well-understood design within those bounds.
+
+    Residual risks to be aware of:
+    - URL appears in Chrome browser history on the device
+    - Key is visible in Lambda console (environment variables) to anyone with AWS access
+    If either concern increases in future, the migration path is: HTTP Request Shortcut
+    app (Android) + API Gateway REST API + AWS::ApiGateway::ApiKey. That combination
+    restores header-based auth and gateway-level key management without changing the
+    Lambda code.
+
 Parameters:
   ApiKey:
     Type: String
@@ -158,6 +220,16 @@ Resources:
       Action: lambda:InvokeFunctionUrl
       Principal: "*"
       FunctionUrlAuthType: NONE
+
+  # Required since October 2025: new Function URLs require lambda:InvokeFunction in
+  # addition to lambda:InvokeFunctionUrl. Principal * is intentionally permissive —
+  # the Lambda handler validates the API key on all invocation paths regardless.
+  ControlApiInvokeFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ControlApiFunction
+      Action: lambda:InvokeFunction
+      Principal: "*"
 
 Outputs:
   FunctionUrl:

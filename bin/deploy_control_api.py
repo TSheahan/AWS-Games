@@ -7,6 +7,12 @@ Deploy or update the GameControlApi CloudFormation stack, which exposes a Lambda
 Function URL for starting and stopping the game server EC2 instance from mobile
 home screen shortcuts.
 
+The stack deploys to ap-southeast-2 (Sydney) because AWS::Lambda::Url is not
+available in ap-southeast-4 (Melbourne) as of 2026-03. The Lambda function itself
+targets ap-southeast-4 via explicit region constants in its code — EC2 and
+CloudFormation API calls cross regions transparently. See Metadata.RegionalWorkaround
+in cloudformation_control_api_stack.yaml for the migration path back to Melbourne.
+
 The stack is stable (not reinstall-cycled) — it survives game server stack
 reinstalls and is updated in place rather than deleted and recreated.
 
@@ -32,7 +38,7 @@ import yaml
 from botocore.exceptions import ClientError, WaiterError
 
 
-REGION = "ap-southeast-4"
+REGION = "ap-southeast-2"  # Sydney — AWS::Lambda::Url unavailable in ap-southeast-4 (Melbourne)
 STACK_NAME = "GameControlApi"
 TEMPLATE_PATH = "../cloudformation_control_api_stack.yaml"
 
@@ -48,6 +54,7 @@ def get_cf_client(profile: str):
     """Create a CloudFormation client using the specified profile."""
     session = boto3.Session(profile_name=profile)
     return session.client("cloudformation", region_name=REGION)
+
 
 
 def describe_stack(cf) -> dict | None:
