@@ -32,6 +32,36 @@ Stack names are timestamped: `GameStack-YYYYMMDD-HHMMSS`.
 
 ---
 
+## `instance.py`
+
+Resolves and acts on the current game server EC2 instance without storing a hardcoded instance
+ID. The instance is looked up at call time from the active CloudFormation stack's resources, so
+OS shortcuts pointing at this script survive stack reinstalls unchanged.
+
+**Runs on:** developer workstation
+**AWS auth:** standard boto3 credential chain; `--profile` overrides the profile name
+**Region:** `ap-southeast-4` (hard-coded constant at top of file)
+
+Subcommands:
+- `start` — start the instance (`ec2.start_instances`)
+- `stop` — stop the instance (`ec2.stop_instances`)
+- `reboot` — reboot the instance (`ec2.reboot_instances`)
+- `status` — print instance state, public IP (if present), and uptime (if running)
+- `ssh` — open an SSH session via `os.execvp`, replacing this process cleanly
+
+Stack discovery filters to `CREATE_COMPLETE` and `UPDATE_COMPLETE` only (operational stacks).
+Errors cleanly if 0 or >1 active `GameStack-*` stacks are found.
+
+**`--pause SECONDS`** — sleep after completion; intended for `.lnk` shortcuts where the terminal
+window closes immediately on exit (e.g. `--pause 5`). Not applicable to `ssh`, which replaces
+the process via `execvp`.
+
+**SSH key path:** `~/.ssh/tim_ssh_to_game_server`
+**SSH connects to:** `ServerIP` stack output (the Elastic IP), not the instance's current public
+IP — stable across stop/start cycles.
+
+---
+
 ## Python conventions
 
 - Dependencies: `boto3`, `pyyaml`, `botocore` (see `requirements.txt` in repo root)

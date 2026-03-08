@@ -121,6 +121,18 @@ that.
 - `disable` / `enable` — toggle the timer
   (`systemctl disable/enable --now minecraft-autoshutdown.timer`)
 
+**`minecraft status` integration:**
+Add a summary row to the general status table so the autoshutdown mechanism stays visible
+during routine health checks — maintaining user recall that the mechanism exists. One line
+is enough: enabled/disabled state, next trigger time, and last run exit code. Example:
+
+```
+autoshutdown  enabled   next: 2026-03-08 14:00 AEDT  last: exit 0
+```
+
+This is intentionally lighter than `minecraft autoshutdown status` (the full deep-dive);
+the goal is ambient awareness, not a duplicate view.
+
 **Bash completion extension:**
 Add `autoshutdown` (with its subcommands and `--dry-run`) to `minecraft-completion.bash`.
 
