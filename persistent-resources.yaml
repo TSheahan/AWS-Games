@@ -1,0 +1,71 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Persistent EBS volume and Elastic IP for the game server. Survives game stack reinstalls.
+
+Metadata:
+  GamePersistentStack:
+    Description: |
+      Intentional hard dependency: the game server stack imports VolumeId and AllocationId
+      from this stack via Fn::ImportValue. CloudFormation blocks deletion of this stack
+      while the game server stack exists, preventing accidental teardown. The dependency
+      releases during a reinstall (game stack deleted → persistent stack exports free →
+      new game stack imports). The EIP and EBS volume survive deletion of this stack because
+      both have DeletionPolicy: Retain — they are not deleted even if this stack itself
+      were deleted.
+
+Parameters:
+  VolumeSize:
+    Type: Number
+    Default: 10
+    Description: |
+      EBS volume size in GiB. Increasing this value triggers a CloudFormation-managed
+      ModifyVolume (online resize, no replacement, no detach required).
+
+  VolumeType:
+    Type: String
+    Default: gp3
+    Description: EBS volume type.
+
+  AvailabilityZone:
+    Type: String
+    Description: |
+      Availability Zone for the EBS volume and EIP. Both resources must be in the same AZ
+      as the EC2 instance. Required at create time; cannot be changed after creation.
+
+Resources:
+  PersistentVolume:
+    Type: AWS::EC2::Volume
+    Properties:
+      Size: !Ref VolumeSize
+      VolumeType: !Ref VolumeType
+      AvailabilityZone: !Ref AvailabilityZone
+      Tags:
+        - Key: Purpose
+          Value: GameServerPersistentFiles
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+
+  PersistentEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+
+Outputs:
+  VolumeId:
+    Description: EBS volume ID — consumed by the game server stack via Fn::ImportValue
+    Value: !Ref PersistentVolume
+    Export:
+      Name: !Sub "${AWS::StackName}-VolumeId"
+
+  AllocationId:
+    Description: EIP allocation ID — consumed by EIPAssociation in the game server stack
+    Value: !GetAtt PersistentEIP.AllocationId
+    Export:
+      Name: !Sub "${AWS::StackName}-AllocationId"
+
+  PublicIp:
+    Description: Static public IP address — human-readable; update DNS / saved server addresses to this value
+    Value: !Ref PersistentEIP
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicIp"

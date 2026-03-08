@@ -37,55 +37,22 @@ scriptable as-is.
 
 ---
 
-## Persistent EIP + EBS stack
+## Persistent EIP + EBS stack — COMPLETE (2026-03-08)
 
-**Pain point:** The EIP and EBS volume are owned by the game stack. Every reinstall
-destroys and recreates both — players lose their saved server address, and the volume
-survives only via `DeletionPolicy: Retain` as a safety net, not intentional design.
-
-**Designed approach:** A separate `GamePersistentStack` (fixed name) owns both
-`AWS::EC2::EIP` and `AWS::EC2::Volume` with `DeletionPolicy: Retain`. The game stack
-becomes fully stateless and ephemeral:
-
-- `AWS::EC2::EIPAssociation` replaces `AWS::EC2::EIP` in the game stack
-- `VolumeId` and `AllocationId` sourced via `Fn::ImportValue` from persistent stack exports
-- `reinstall_stack.py` no longer needs to discover or pass these values — the template
-  handles the dependency
-- `NewVolume` / `CreateNewVolume` condition removed from game stack (hard cutover)
-
-**Intentional hard CF dependency:** The game server stack importing from the persistent
-stack via `Fn::ImportValue` means CloudFormation will block deletion of the persistent
-stack while the game server stack exists. This is the desired protection — the persistent
-stack cannot be accidentally torn down mid-session. The dependency releases when the game
-server stack is deleted during a reinstall, at which point the persistent stack's exports
-are free again for the new game server stack to import.
-
-This is the architectural inverse of the control API pattern: the control API uses dynamic
-lookup to *avoid* a hard dependency on the ephemeral game server stack. Here, a hard
-dependency is exactly right because the persistent stack must outlive any number of game
-server reinstalls.
-
-**Resizing EBS:** Change `VolumeSize` parameter on the persistent stack → `update-stack` →
-CloudFormation issues `ModifyVolume` online (no replacement, no detach).
-
-**First-time setup** — `bin/setup_persistent_stack.py`:
-- **Create mode** (no existing resources): standard `create_stack`
-- **Import mode** (`--import-volume-id` / `--import-allocation-id`): adopts orphaned
-  resources via `create-change-set --change-set-type IMPORT`; reads actual properties
-  via `describe_volumes` / `describe_addresses` to match template parameters
-
-Plan on file: `~/.claude/plans/lexical-cuddling-creek.md`
+Implemented. `persistent-resources.yaml` + `bin/setup_persistent_stack.py` added;
+`cloudformation_server_stack.yaml` and `bin/reinstall_stack.py` updated.
+Game stack is now fully stateless. See CHANGELOG.md.
 
 ---
 
-## `minecraft` wrapper — remaining live checks
+## `minecraft` wrapper — remaining live checks — COMPLETE (2026-03-08)
 
-Implemented and partially verified. Confirm on next session with a running server:
+All checks confirmed on live server:
 
-- Bash completion fires on a fresh boot (bash-completion package present, `/etc/bash_completion.d/` sourced)
-- `minecraft status --yaml` output is well-formed
-- `minecraft status <instance>` for a running server shows `🟢 running`
-- `minecraft screen <instance>` attaches cleanly
+- ~~Bash completion fires on a fresh boot (bash-completion package present, `/etc/bash_completion.d/` sourced)~~ — confirmed 2026-03-08
+- ~~`minecraft status --yaml` output is well-formed~~ — confirmed 2026-03-08
+- ~~`minecraft status <instance>` for a running server shows `🟢 running`~~ — confirmed 2026-03-08
+- ~~`minecraft screen <instance>` attaches cleanly~~ — confirmed 2026-03-08
 
 ---
 
@@ -118,6 +85,13 @@ autoshutdown  enabled   next: 2026-03-08 14:00 AEDT  last: exit 0
 
 This is intentionally lighter than `minecraft autoshutdown status` (the full deep-dive);
 the goal is ambient awareness, not a duplicate view.
+
+**TODO (low priority) — per-server idle state in `minecraft status`:**
+Surface idle detection state alongside running/stopped status — i.e. whether each server
+is currently considered idle by the autoshutdown logic (no players, pause signal seen in
+console log tail). Reuse the detection logic from `minecraft-autoshutdown` rather than
+re-implementing it. Useful for understanding why an autoshutdown did or did not fire without
+having to read the autoshutdown logs directly.
 
 **Bash completion extension:**
 Add `autoshutdown` (with its subcommands and `--dry-run`) to `minecraft-completion.bash`.

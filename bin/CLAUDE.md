@@ -4,9 +4,34 @@ Scripts in this directory run on the **developer workstation**, not on the EC2 i
 
 ---
 
+## `setup_persistent_stack.py`
+
+One-time setup tool for the `GamePersistentStack` — the singleton stack that owns the EBS
+volume and Elastic IP that survive game server reinstalls. Must be run before the first
+`reinstall_stack.py` invocation.
+
+**Runs on:** developer workstation
+**AWS auth:** standard boto3 credential chain; `--profile` overrides
+**Region:** `ap-southeast-4` (hard-coded constant at top of file)
+**Template path:** `../persistent-resources.yaml` (relative to `bin/`)
+
+Key behaviours:
+- **Create mode** (no `--import-*` flags): `create_stack` with `--availability-zone` required
+- **Import mode**: adopts orphaned EBS volume and/or EIP via CFN IMPORT changeset; derives
+  actual resource properties from AWS (volume size/type/AZ; EIP public IP) to satisfy CFN
+  import validation requirements
+- Errors if the stack already exists (preventing double-creation)
+- Safe by default: `--execute` required to write state; dry run emits YAML summary
+- `--yes` / `-y` skips interactive confirmation when executing
+
+Environment variables accepted:
+- `GAME_PERSISTENT_STACK` → `--persistent-stack` (default: `GamePersistentStack`)
+
+---
+
 ## `reinstall_stack.py`
 
-Manages the full CloudFormation stack lifecycle for rapid iteration.
+Manages the ephemeral game server stack lifecycle for rapid iteration.
 
 **Runs on:** developer workstation
 **AWS auth:** standard boto3 credential chain; `--profile` overrides the profile name
@@ -15,8 +40,11 @@ Manages the full CloudFormation stack lifecycle for rapid iteration.
 
 Key behaviours:
 - Errors if more than one `GameStack-*` stack exists simultaneously (manual cleanup required)
-- Adopts `ExistingVolumeId` from the deleted stack's parameters automatically unless `--no-reuse-existing-volume` is passed
-- Calls `ec2.describe_volumes` to detect the volume's Availability Zone and passes it as `AvailabilityZone` to CloudFormation — this prevents attachment failures when reusing an existing EBS volume
+- Reads `VolumeId` from `GamePersistentStack` outputs to derive `AvailabilityZone` via
+  `ec2.describe_volumes`; errors clearly if the persistent stack is absent
+- Passes `PersistentStackName` as a CFN parameter — the game stack template resolves
+  `VolumeId` and `AllocationId` itself at deploy time via `Fn::ImportValue`; this creates
+  a hard CFN dependency that blocks deletion of the persistent stack while the game stack exists
 - Argument precedence: explicit CLI flag > environment variable > default value
 - Safe by default: without `--execute` the script is a dry run — resolves all parameters and emits YAML to stdout but makes no AWS state changes
 - `--execute` required to actually delete/create stacks; `--yes` / `-y` skips interactive confirmations when executing (for agentic or CI use)
@@ -25,8 +53,8 @@ Environment variables accepted:
 - `GAME_PORT_START` → `--port-start`
 - `GAME_PORT_END` → `--port-end`
 - `GAME_SETUP_COMMAND` → `--setup-command` (required unless provided)
-- `GAME_EXISTING_VOLUME_ID` → `--existing-volume-id`
 - `GAME_INSTANCE_TYPE` → `--instance-type`
+- `GAME_PERSISTENT_STACK` → `--persistent-stack` (default: `GamePersistentStack`)
 
 Stack names are timestamped: `GameStack-YYYYMMDD-HHMMSS`.
 

@@ -25,14 +25,23 @@ Developer workstation
                                             └── minecraft-servers.yaml → per-server systemd units, start/stop scripts
 ```
 
-### AWS Resources (per CloudFormation stack)
+### AWS Resources — `GamePersistentStack` (singleton, never deleted)
+| Resource | Type | Notes |
+|---|---|---|
+| `PersistentVolume` | EBS gp3 10 GB | `DeletionPolicy: Retain`; exports `VolumeId` |
+| `PersistentEIP` | Elastic IP | `DeletionPolicy: Retain`; exports `AllocationId` and `PublicIp` |
+
+### AWS Resources — `GameStack-YYYYMMDD-HHMMSS` (ephemeral, reinstalled freely)
 | Resource | Type | Notes |
 |---|---|---|
 | `ServerInstance` | EC2 | Amazon Linux 2023, ARM64/Graviton, t4g.medium default |
-| `ServerEIP` | Elastic IP | Static public IP, output as `ServerIP` |
-| `NewVolume` | EBS gp3 10 GB | **DeletionPolicy: Retain** — data survives stack deletion |
-| `PersistentVolumeAttachment` | Volume Attachment | Attached at `/dev/sdf`, mounted at `/mnt/persist` |
+| `EIPAssociation` | EIP Association | Binds `AllocationId` from persistent stack to `ServerInstance` |
+| `PersistentVolumeAttachment` | Volume Attachment | Attaches `VolumeId` from persistent stack at `/dev/sdf`, mounted at `/mnt/persist` |
 | `ServerSecurityGroup` | Security Group | SSH (22) + configurable game port range |
+
+CloudFormation blocks deletion of `GamePersistentStack` while the game stack exists
+(hard `Fn::ImportValue` dependency). This is intentional — it prevents accidental teardown
+of the EIP and volume mid-session.
 
 **AMI:** Resolved dynamically at deploy time via SSM — `{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.12-arm64}}` (AL2023 kernel-6.12 ARM64, EoL June 2029)
 **Key Pair:** `tim_ssh_to_game_server` (must exist in region before deploy)
@@ -44,9 +53,11 @@ Developer workstation
 
 | Path | Runs on | Purpose |
 |---|---|---|
-| `cloudformation_server_stack.yaml` | AWS | Main game server IaC template; creates EC2, EBS, EIP, SG |
+| `persistent-resources.yaml` | AWS | Singleton persistent stack: EBS volume + EIP |
+| `cloudformation_server_stack.yaml` | AWS | Ephemeral game server stack: EC2, SG, EIPAssociation, VolumeAttachment |
 | `cloudformation_control_api_stack.yaml` | AWS | Lambda Function URL stack for mobile start/stop control |
-| `bin/reinstall_stack.py` | Workstation | Delete old stack, create new timestamped stack |
+| `bin/setup_persistent_stack.py` | Workstation | Create or import the GamePersistentStack (one-time setup) |
+| `bin/reinstall_stack.py` | Workstation | Delete old game stack, create new timestamped game stack |
 | `bin/instance.py` | Workstation | Resolve and control the game server EC2 instance (start/stop/reboot/status/ssh) |
 | `bin/deploy_control_api.py` | Workstation | Deploy or update the mobile control API CloudFormation stack |
 | `ec2/minecraft/setup.sh` | EC2 instance (root, via UserData) | Instance-level setup: Java install, JAR download, invokes provision_servers.py |
@@ -61,17 +72,28 @@ Developer workstation
 
 ## Deployment Workflow
 
+### One-time persistent stack setup (`bin/setup_persistent_stack.py`)
+Run once before the first game stack deploy. Idempotent only in the sense that it errors if the
+stack already exists (preventing double-creation).
+
+- **Create mode** (no `--import-*` flags): `create_stack` with `--availability-zone` required
+- **Import mode** (`--import-volume-id` / `--import-allocation-id`): adopts orphaned resources
+  via CFN IMPORT changeset; reads actual properties from AWS to populate template parameters
+- Outputs `VolumeId`, `AllocationId`, `PublicIp` as YAML on stdout on success
+
 ### Developer side (`bin/reinstall_stack.py`)
 1. Discovers existing `GameStack-*` stacks; errors on multiples
 2. Prompts to delete existing stack; waits for `DELETE_COMPLETE`
-3. Reads `ExistingVolumeId` from old stack parameters (for data reuse)
-4. Calls `ec2.describe_volumes` to detect the volume's AZ → passes as `AvailabilityZone` param
-5. Prompts to confirm creation with full parameter summary
-6. Reads `cloudformation_server_stack.yaml` from `../` (relative to `bin/`)
-7. Creates `GameStack-YYYYMMDD-HHMMSS` stack; waits for `CREATE_COMPLETE`
-8. Prints all stack outputs including `ServerIP`
+3. Reads `VolumeId` (for AZ derivation) and `PublicIp` (for summary) from `GamePersistentStack` outputs
+4. Calls `ec2.describe_volumes` on the volume → derives `AvailabilityZone`
+5. Passes `PersistentStackName` + `AvailabilityZone` as CFN parameters; the game stack
+   resolves `VolumeId` and `AllocationId` itself at deploy time via `Fn::ImportValue`
+6. Prompts to confirm creation with full parameter summary
+7. Reads `cloudformation_server_stack.yaml` from `../` (relative to `bin/`)
+8. Creates `GameStack-YYYYMMDD-HHMMSS` stack; waits for `CREATE_COMPLETE`
+9. Prints all stack outputs including `ServerIP`
 
-**Env var overrides:** `GAME_PORT_START`, `GAME_PORT_END`, `GAME_SETUP_COMMAND`, `GAME_EXISTING_VOLUME_ID`, `GAME_INSTANCE_TYPE`
+**Env var overrides:** `GAME_PORT_START`, `GAME_PORT_END`, `GAME_SETUP_COMMAND`, `GAME_INSTANCE_TYPE`, `GAME_PERSISTENT_STACK`
 
 ### EC2 UserData bootstrap (in the CloudFormation template)
 1. Sets timezone: `Australia/Melbourne`
@@ -121,8 +143,8 @@ provisioned:
 ## Operational Notes
 
 - **EULA:** Must be accepted manually after first deploy — SSH in and set `eula=true` in `eula.txt` in each server's working directory under `/mnt/persist/minecraft/`
-- **Volume retention:** EBS has `DeletionPolicy: Retain`; always check for orphan volumes after teardown
-- **AZ pinning:** `reinstall_stack.py` auto-detects volume AZ to prevent attachment failures on reuse
+- **Volume and EIP retention:** Both resources are owned by `GamePersistentStack` with `DeletionPolicy: Retain`. The game stack is fully stateless — reinstalls do not affect the EIP or volume.
+- **AZ pinning:** `reinstall_stack.py` auto-detects volume AZ from `GamePersistentStack` to prevent attachment failures
 - **Screen sessions:** Per-server sessions named `minecraft-<server_id>`; use `minecraft screen <instance>` (preferred) or `screen -r minecraft-<server_id>` (direct); detach with Ctrl+A, D
 - **Java version:** Java 21 (Corretto) for Minecraft 1.21.x; comment in setup.sh notes 2026 versioning may require Java 25
 - **Root required:** `provision_servers.py` and `setup.sh` must run as root on the instance; both abort if `/mnt/persist` is not mounted
@@ -135,7 +157,8 @@ provisioned:
 
 Before running `reinstall_stack.py`:
 - Confirm `tim_ssh_to_game_server` key pair exists in `ap-southeast-4`
-- Prepare `GAME_SETUP_COMMAND`; for volume reuse, set `GAME_EXISTING_VOLUME_ID` or pass `--existing-volume-id`
+- Confirm `GamePersistentStack` exists (run `bin/setup_persistent_stack.py` if not)
+- Prepare `GAME_SETUP_COMMAND`
 
 After `CREATE_COMPLETE`:
 1. SSH in: `python bin/instance.py ssh`

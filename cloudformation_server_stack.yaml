@@ -1,6 +1,59 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: AWS CloudFormation Template for a hosted game server
 
+Metadata:
+  GameStack:
+    Description: |
+      This stack is stateless and ephemeral. VolumeId and AllocationId are resolved via
+      Fn::ImportValue from the persistent stack (PersistentStackName parameter, default:
+      GamePersistentStack). CloudFormation enforces a hard dependency in both directions:
+      this stack cannot be created unless the persistent stack exists and has exported its
+      outputs; and the persistent stack cannot be deleted while this stack holds active
+      import references. The dependency releases when this stack is deleted, freeing the
+      persistent stack's exports for the next game stack to import. Deleting and recreating
+      this stack does not affect the EBS volume or EIP — both are owned by the persistent
+      stack with DeletionPolicy: Retain.
+
+    UpdateConstraint: |
+      THIS STACK MUST NEVER BE UPDATED IN PLACE (update-stack). It is RECREATE-ONLY.
+
+      Two resource types present in this template make in-place updates unsafe:
+
+      - AWS::EC2::VolumeAttachment: a legacy resource type with no read/describe handler.
+        CloudFormation cannot confirm whether the attachment already exists before calling
+        attach_volume(). On any stack update — even one that does not touch this resource's
+        properties — CFN may re-evaluate it due to shared dependency propagation and blindly
+        call attach_volume(), which fails with AlreadyExists if the volume is attached.
+
+      - AWS::EC2::EIPAssociation: an association-type resource in the same family. Expected
+        to carry the same risk: no reliable read handler, likely re-processed on update.
+
+      This was confirmed empirically: attempting to add DeletionPolicy: Retain to an
+      unrelated resource (ServerEIP) in the old game stack caused CFN to re-process
+      PersistentVolumeAttachment and fail with AlreadyExists.
+
+      The architecture's response: reinstall_stack.py enforces recreate-only — it deletes
+      the stack and creates a new one. update-stack is never called. This sidesteps the
+      constraint entirely: on create-stack the volume is not yet attached and
+      EIPAssociation does not yet exist, so both resource handlers succeed cleanly.
+
+    TODO: |
+      Investigate whether the update-immutability constraint can be eliminated:
+
+      1. Check whether newer CFN resource provider versions for AWS::EC2::VolumeAttachment
+         and AWS::EC2::EIPAssociation have added read handlers. The CloudFormation registry
+         schema for each type (aws cloudformation describe-type --type-name ...) exposes
+         whether additionalIdentifiers and read handlers are present. If a read handler
+         exists, CFN can diff current vs desired state and skip the re-attach call.
+
+      2. Evaluate AWS::EC2::VolumeAttachment replacement with instance block device
+         mappings or a custom resource backed by a Lambda that checks attachment state
+         before calling attach_volume(). Either would give deterministic update behaviour.
+
+      3. Consider whether the game stack ever needs in-place updates at all. If the answer
+         remains no (all changes go through teardown/recreate), the constraint is moot and
+         this TODO can be closed as won't-fix by design.
+
 Parameters:
   ServerPortNumberStart:
     Type: Number
@@ -14,10 +67,14 @@ Parameters:
     Type: String
     Description: Defines the setup invocation. Permits code execution. Direct secrets prohibited.
 
-  ExistingVolumeId:
+  PersistentStackName:
     Type: String
-    Description: ID of an existing EBS volume to attach. Leave empty to create a new volume.
-    Default: ""
+    Default: GamePersistentStack
+    Description: Name of the persistent stack whose VolumeId and AllocationId exports this stack imports.
+
+  AvailabilityZone:
+    Type: String
+    Description: Availability Zone — must match the persistent volume's AZ. Sourced via reinstall_stack.py.
 
   InstanceType:
     Type: String
@@ -28,20 +85,6 @@ Parameters:
       - Use t4g.large for more RAM (8GB) with many players/mods.
       - Use m7g.medium (or larger) for sustained higher CPU (non-burstable baseline performance).
 
-  AvailabilityZone:
-    Type: String
-    Default: ""
-    Description: Availability Zone for the instance and new volume. Leave empty for automatic selection of first AZ. Needed when reusing an existing volume.
-
-Conditions:
-  CreateNewVolume: !Equals
-    - !Ref ExistingVolumeId
-    - ""
-  HasAvailabilityZone: !Not
-    - !Equals
-      - !Ref AvailabilityZone
-      - ""
-
 Resources:
   ServerInstance:
     Type: AWS::EC2::Instance
@@ -51,13 +94,7 @@ Resources:
       KeyName: tim_ssh_to_game_server  # EC2 / key pairs
       SecurityGroupIds:
         - !Ref ServerSecurityGroup
-      AvailabilityZone: !If
-        - HasAvailabilityZone
-        - !Ref AvailabilityZone
-        - !Select
-          - 0
-          - !GetAZs
-            Ref: AWS::Region
+      AvailabilityZone: !Ref AvailabilityZone
       UserData:
         Fn::Base64: !Sub
           - |
@@ -180,36 +217,22 @@ Resources:
             # as root, invoke the setup command, expecting it to handle system & user setup tasks
             # use due caution for code execution capability
             ${SetupCommand}
-          - TargetVolumeId: !If [CreateNewVolume, !Ref NewVolume, !Ref ExistingVolumeId]
-
-  NewVolume:
-    Type: AWS::EC2::Volume
-    Condition: CreateNewVolume
-    Properties:
-      Size: 10  # Adjust as needed for world files - 1.13GB after 1 months minecraft play
-      VolumeType: gp3
-      AvailabilityZone: !If  # duplicated AZ choice - reading it from instance would create a dependency loop.
-        - HasAvailabilityZone
-        - !Ref AvailabilityZone
-        - !Select
-          - 0
-          - !GetAZs
-            Ref: AWS::Region
-      Tags:
-        - Key: "Purpose"
-          Value: "GameServerPersistentFiles"
-    DeletionPolicy: Retain
+          - TargetVolumeId:
+              Fn::ImportValue: !Sub "${PersistentStackName}-VolumeId"
 
   PersistentVolumeAttachment:
     Type: AWS::EC2::VolumeAttachment
     Properties:
       InstanceId: !Ref ServerInstance
-      VolumeId: !If [CreateNewVolume, !Ref NewVolume, !Ref ExistingVolumeId]
+      VolumeId:
+        Fn::ImportValue: !Sub "${PersistentStackName}-VolumeId"
       Device: /dev/sdf
 
-  ServerEIP:
-    Type: AWS::EC2::EIP
+  EIPAssociation:
+    Type: AWS::EC2::EIPAssociation
     Properties:
+      AllocationId:
+        Fn::ImportValue: !Sub "${PersistentStackName}-AllocationId"
       InstanceId: !Ref ServerInstance
 
   ServerSecurityGroup:
@@ -228,8 +251,9 @@ Resources:
 
 Outputs:
   ServerIP:
-    Description: IP Address of the server
-    Value: !Ref ServerEIP
+    Description: Static IP address of the server (owned by the persistent stack; stable across reinstalls)
+    Value:
+      Fn::ImportValue: !Sub "${PersistentStackName}-PublicIp"
   ServerPortStart:
     Description: First TCP port used for the server
     Value: !Ref ServerPortNumberStart
@@ -239,9 +263,3 @@ Outputs:
   SetupCommand:
     Description: Displays the SetupCommand which was used at instance instantiation
     Value: !Ref SetupCommand
-  NewVolumeId:
-    Description: The ID of the newly created EBS volume (if created).
-    Value: !If [ CreateNewVolume, !Ref NewVolume, "" ]
-  ExistingVolumeId:
-    Description: Mirrors the input for optional existing EBS volume ID.
-    Value: !Ref ExistingVolumeId

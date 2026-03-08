@@ -5,6 +5,56 @@ provide finer-grained detail; this log captures intent and trajectory.
 
 ---
 
+## 2026-03-08 — Persistent EIP + EBS stack
+
+**GamePersistentStack — EIP and EBS volume moved out of the ephemeral game stack**
+
+The EIP and EBS volume were previously owned by the timestamped `GameStack-*`, which meant
+every reinstall destroyed and recreated the EIP (breaking saved server addresses) and left the
+volume dangling with only `DeletionPolicy: Retain` as a safety net.
+
+New architecture:
+- `persistent-resources.yaml` — new singleton CFN template; creates `PersistentEIP` and
+  `PersistentVolume`, both with `DeletionPolicy: Retain`; exports `VolumeId`, `AllocationId`,
+  `PublicIp` as named CFN stack exports
+- `bin/setup_persistent_stack.py` — one-time setup tool; supports create mode
+  (fresh resources) and import mode (`--import-volume-id` / `--import-allocation-id`)
+  for adopting existing orphaned resources via CFN IMPORT changeset; three-step mixed
+  import flow handles the CFN restriction that a new stack's IMPORT changeset must list
+  ALL resources: (1) `create_stack` with fresh resources only, (2) IMPORT changeset with
+  all resources but only pre-existing outputs (CFN also forbids adding outputs in an IMPORT
+  changeset), (3) regular `update_stack` to add outputs for the newly imported resources
+- `cloudformation_server_stack.yaml` — `NewVolume`, `CreateNewVolume` condition,
+  `HasAvailabilityZone` condition, and `ExistingVolumeId` parameter removed; `ServerEIP`
+  replaced by `EIPAssociation`; `PersistentStackName` parameter added (default:
+  `GamePersistentStack`); `VolumeId` and `AllocationId` resolved at deploy time via
+  `Fn::ImportValue`; `ServerIP` output changed from `!GetAtt EIPAssociation.PublicIp`
+  (invalid — `AWS::EC2::EIPAssociation` has no `PublicIp` attribute) to
+  `Fn::ImportValue: !Sub "${PersistentStackName}-PublicIp"`; `Metadata` block added
+  documenting the update-immutability constraint on `AWS::EC2::VolumeAttachment` and
+  `AWS::EC2::EIPAssociation` (no read handlers; re-processed on any update; recreate-only
+  is the correct pattern) with a TODO for future mitigation analysis
+- `bin/reinstall_stack.py` — volume-reuse logic removed; reads `VolumeId` from persistent
+  stack outputs to derive `AvailabilityZone`; passes `PersistentStackName` as a CFN
+  parameter so the game stack can resolve `Fn::ImportValue` references itself; `--delete-only`
+  flag added for teardown without redeploy; `UPDATE_ROLLBACK_COMPLETE` added to the stack
+  status filter so stacks stuck in that state are visible and deletable
+
+The game stack is now fully stateless. Reinstalls do not affect the EIP or volume.
+The `Fn::ImportValue` references create a hard CFN dependency: CloudFormation blocks
+deletion of the persistent stack while the game stack exists. The dependency releases
+when the game stack is deleted during a reinstall, freeing the exports for the next
+game stack to import.
+
+End-to-end verified: `GamePersistentStack` created by importing the orphaned volume
+(`vol-0f4cee5cb4bc42932`, world data intact, 2024 creation date) and allocating a fresh
+EIP; game stack rebuilt cleanly; NVMe serial-based volume detection succeeded on second
+poll (5 s); all Minecraft servers provisioned; `balkan` confirmed running post-reboot.
+
+CLAUDE.md hierarchy updated throughout to reflect the new two-stack architecture.
+
+---
+
 ## 2026-03-08 — CLAUDE.md hierarchy maintenance and strategic planning update
 
 **Operational knowledge split — `memory/operations.md` → CLAUDE.md hierarchy**

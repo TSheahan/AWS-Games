@@ -5,39 +5,39 @@ bin/reinstall_stack.py
 
 Developer tool to accelerate iteration on the GameStack CloudFormation deployment.
 
-Workflow:
+Default workflow (delete + create):
 1. Find active stacks in ap-southeast-4 whose name starts with 'GameStack'.
 2. If exactly one exists → prompt to delete it (skipped with --yes or --dry-run).
 3. If multiple → error and abort.
 4. If none → proceed directly.
 5. Delete confirmed stack and wait for DELETE_COMPLETE.
-6. Determine volume handling and resolve all parameters.
-7. Prompt to create a new stack (skipped with --yes or --dry-run).
-8. Create a new timestamped stack using the local template.
-9. Wait for CREATE_COMPLETE and emit key outputs as JSON on stdout.
+6. Look up VolumeId, AllocationId, and PublicIp from the persistent stack.
+7. Derive AvailabilityZone from the volume (ec2.describe_volumes).
+8. Prompt to create a new stack (skipped with --yes or --dry-run).
+9. Create a new timestamped stack using the local template.
+10. Wait for CREATE_COMPLETE and emit key outputs as YAML on stdout.
+
+Delete-only workflow (--delete-only):
+  Steps 1–5 only. Exits after DELETE_COMPLETE without contacting the persistent stack
+  or creating a new game stack. Use when tearing down without an immediate redeploy,
+  e.g. during a first-time migration to the persistent stack architecture.
 
 Authentication: Uses standard AWS credential chain (~/.aws/credentials, env vars, etc.).
 Optional --profile override provided.
 
-Volume reuse: --reuse-existing-volume / --no-reuse-existing-volume (default: reuse)
-  If an existing stack is found and deleted, and --existing-volume-id is not explicitly
-  provided, the script can automatically adopt the ExistingVolumeId parameter value
-  from the old stack (if present in its parameters).
+Persistent stack: VolumeId and AllocationId are sourced from GamePersistentStack (or the
+stack named by GAME_PERSISTENT_STACK / --persistent-stack). The persistent stack must exist
+before running this script in default mode. Use bin/setup_persistent_stack.py to create it.
+Not accessed in --delete-only mode.
 
 Environment variable support:
   GAME_PORT_START           → --port-start
   GAME_PORT_END             → --port-end
-  GAME_SETUP_COMMAND        → --setup-command (required unless provided)
-  GAME_EXISTING_VOLUME_ID   → --existing-volume-id
+  GAME_SETUP_COMMAND        → --setup-command (required in default mode unless set here)
   GAME_INSTANCE_TYPE        → --instance-type
+  GAME_PERSISTENT_STACK     → --persistent-stack
 
 Explicit CLI arguments always override environment variables.
-
-AZ pinning:
-  When ExistingVolumeId is non-empty (either explicit, reused, or from env),
-  the script automatically detects the volume's Availability Zone using EC2 describe_volumes
-  and passes it as a new CloudFormation parameter AvailabilityZone.
-  This pins the EC2 instance to the correct AZ, preventing attachment failures.
 
 Safe by default: --execute required to write state
   Without --execute the script resolves all parameters and reports what would happen,
@@ -50,14 +50,13 @@ Confirmation skipping: --yes / -y
 
 Output:
   Status and progress messages → stderr (via logger).
-  Structured result (stack outputs or dry-run parameters) → stdout as JSON.
+  Structured result (stack outputs or dry-run parameters) → stdout as YAML.
 """
 
 import argparse
 import datetime
 import logging
 import os
-import random
 import sys
 
 import boto3
@@ -67,7 +66,9 @@ from botocore.exceptions import ClientError, WaiterError
 
 REGION = "ap-southeast-4"
 STACK_PREFIX = "GameStack"
-TEMPLATE_PATH = "../cloudformation_server_stack.yaml"
+DEFAULT_PERSISTENT_STACK = "GamePersistentStack"
+# Resolved relative to this script file so the script can be invoked from any directory.
+TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cloudformation_server_stack.yaml")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -93,34 +94,28 @@ def find_game_stacks(client):
     """Return a list of active stacks matching the prefix."""
     paginator = client.get_paginator("list_stacks")
     matching = []
-    for page in paginator.paginate(StackStatusFilter=["CREATE_COMPLETE", "UPDATE_COMPLETE", "CREATE_FAILED", "UPDATE_FAILED", "ROLLBACK_COMPLETE"]):
+    for page in paginator.paginate(StackStatusFilter=["CREATE_COMPLETE", "UPDATE_COMPLETE", "UPDATE_ROLLBACK_COMPLETE", "CREATE_FAILED", "UPDATE_FAILED", "ROLLBACK_COMPLETE"]):
         for stack in page.get("StackSummaries", []):
             if stack["StackName"].startswith(STACK_PREFIX):
                 matching.append(stack)
     return matching
 
 
-def get_stack_parameters(client, stack_name: str) -> dict:
-    """Return a dict of ParameterKey → ParameterValue for the given stack."""
-    desc = client.describe_stacks(StackName=stack_name)
-    params = desc["Stacks"][0].get("Parameters", [])
-    return {p["ParameterKey"]: p["ParameterValue"] for p in params}
-
-
-def get_random_az(ec2_client) -> str:
-    """Return a randomly selected available Availability Zone in the region."""
+def get_persistent_stack_outputs(cf_client, stack_name: str) -> dict:
+    """Return outputs of the persistent stack as a dict; exit with a clear message if absent."""
     try:
-        response = ec2_client.describe_availability_zones(
-            Filters=[{"Name": "state", "Values": ["available"]}]
-        )
+        desc = cf_client.describe_stacks(StackName=stack_name)
     except ClientError as e:
-        logger.error("Error describing Availability Zones: %s", e)
-        sys.exit(1)
-    azs = [az["ZoneName"] for az in response["AvailabilityZones"]]
-    if not azs:
-        logger.error("No available Availability Zones found in region %s.", REGION)
-        sys.exit(1)
-    return random.choice(azs)
+        if "does not exist" in str(e):
+            logger.error(
+                "Persistent stack '%s' does not exist. "
+                "Run bin/setup_persistent_stack.py to create it first.",
+                stack_name,
+            )
+            sys.exit(1)
+        raise
+    outputs = desc["Stacks"][0].get("Outputs", [])
+    return {out["OutputKey"]: out["OutputValue"] for out in outputs}
 
 
 def get_volume_az(ec2_client, volume_id: str) -> str:
@@ -130,8 +125,7 @@ def get_volume_az(ec2_client, volume_id: str) -> str:
         if not response["Volumes"]:
             logger.error("Volume %s not found in region %s.", volume_id, REGION)
             sys.exit(1)
-        az = response["Volumes"][0]["AvailabilityZone"]
-        return az
+        return response["Volumes"][0]["AvailabilityZone"]
     except ClientError as e:
         if e.response["Error"]["Code"] == "InvalidVolume.NotFound":
             logger.error("Volume %s does not exist or is not accessible.", volume_id)
@@ -208,8 +202,8 @@ def main():
         "port_start": os.getenv("GAME_PORT_START"),
         "port_end": os.getenv("GAME_PORT_END"),
         "setup_command": os.getenv("GAME_SETUP_COMMAND"),
-        "existing_volume_id": os.getenv("GAME_EXISTING_VOLUME_ID"),
         "instance_type": os.getenv("GAME_INSTANCE_TYPE"),
+        "persistent_stack": os.getenv("GAME_PERSISTENT_STACK", DEFAULT_PERSISTENT_STACK),
     }
 
     parser = argparse.ArgumentParser(description="Reinstall GameStack CloudFormation stack for rapid iteration")
@@ -219,20 +213,16 @@ def main():
                         help="ServerPortNumberEnd (default: same as port-start or GAME_PORT_END)")
     parser.add_argument("--setup-command", type=str,
                         default=env_defaults["setup_command"],
-                        required=(not env_defaults["setup_command"]),
-                        help="Full SetupCommand string (required unless GAME_SETUP_COMMAND is set)")
-    parser.add_argument("--existing-volume-id", type=str, default=env_defaults["existing_volume_id"],
-                        help="ExistingVolumeId; if omitted and --reuse-existing-volume is true, adopt from previous stack "
-                             "(or use GAME_EXISTING_VOLUME_ID)")
+                        help="Full SetupCommand string (required in default mode unless GAME_SETUP_COMMAND is set)")
     parser.add_argument("--instance-type", type=str,
                         default="t4g.medium" if not env_defaults["instance_type"] else env_defaults["instance_type"],
                         help="InstanceType (default: t4g.medium or GAME_INSTANCE_TYPE)")
+    parser.add_argument("--persistent-stack", type=str,
+                        default=env_defaults["persistent_stack"],
+                        help=f"Persistent stack name (default: GAME_PERSISTENT_STACK or '{DEFAULT_PERSISTENT_STACK}')")
     parser.add_argument("--profile", type=str, default="default", help="AWS profile name (default: default)")
-    parser.add_argument("--reuse-existing-volume", action="store_true", dest="reuse_volume",
-                        help="Automatically reuse ExistingVolumeId from deleted stack (default)")
-    parser.add_argument("--no-reuse-existing-volume", action="store_false", dest="reuse_volume",
-                        help="Do not reuse ExistingVolumeId from previous stack")
-    parser.set_defaults(reuse_volume=True)
+    parser.add_argument("--delete-only", action="store_true", dest="delete_only",
+                        help="Delete the existing game stack and exit without creating a new one.")
     parser.add_argument("--yes", "-y", action="store_true", dest="yes",
                         help="Skip interactive confirmations when running with --execute (for agentic or CI use)")
     parser.add_argument("--execute", action="store_true", dest="execute",
@@ -242,6 +232,10 @@ def main():
     # Without --execute the script is non-destructive — no interactive prompts needed
     if not args.execute:
         args.yes = True
+
+    # --setup-command is only required in default (delete + create) mode
+    if not args.delete_only and not args.setup_command:
+        parser.error("--setup-command is required in default mode (or set GAME_SETUP_COMMAND)")
 
     # Resolve port-end: CLI > env > port-start
     if args.port_end is None:
@@ -253,10 +247,9 @@ def main():
     cf_client = get_cf_client(args.profile)
     ec2_client = get_ec2_client(args.profile)
 
-    # Find existing stacks
+    # Find existing game stacks
     stacks = find_game_stacks(cf_client)
 
-    old_volume_id = None
     deleted_stack_name = None
 
     if len(stacks) > 1:
@@ -275,56 +268,58 @@ def main():
                 print("Aborted.")
                 sys.exit(0)
 
-        # Fetch parameters to possibly reuse ExistingVolumeId
-        params = get_stack_parameters(cf_client, stack["StackName"])
-        old_volume_id = params.get("ExistingVolumeId", "")
         deleted_stack_name = stack["StackName"]
-
         delete_stack(cf_client, deleted_stack_name, dry_run=not args.execute)
 
-    # Determine final ExistingVolumeId
-    final_volume_id = args.existing_volume_id
+    if args.delete_only:
+        result = {"delete_only": True, "deleted": deleted_stack_name, "dry_run": not args.execute}
+        print(yaml.dump(result, default_flow_style=False, sort_keys=False))
+        return
 
-    if final_volume_id is not None:
-        logger.info("Using explicitly provided ExistingVolumeId: %s", final_volume_id)
-    elif args.reuse_volume and old_volume_id:
-        logger.info("Reusing ExistingVolumeId '%s' from previous stack %s.", old_volume_id, deleted_stack_name or "")
-        final_volume_id = old_volume_id
-    else:
-        logger.info("No existing volume specified — a new EBS volume will be created.")
-        final_volume_id = ""
+    # Source VolumeId and AllocationId from the persistent stack
+    logger.info("Reading outputs from persistent stack '%s'...", args.persistent_stack)
+    persistent_outputs = get_persistent_stack_outputs(cf_client, args.persistent_stack)
 
-    # Always resolve AvailabilityZone explicitly — guarantees both ServerInstance and NewVolume
-    # land in the same AZ. For an existing volume the AZ is pinned to the volume's location;
-    # for a new volume a random AZ is selected to distribute deployments across the region.
-    if final_volume_id:
-        logger.info("Detecting Availability Zone for volume %s...", final_volume_id)
-        availability_zone = get_volume_az(ec2_client, final_volume_id)
-        logger.info("Volume is in Availability Zone: %s", availability_zone)
-    else:
-        availability_zone = get_random_az(ec2_client)
-        logger.info("New volume — randomly selected Availability Zone: %s", availability_zone)
+    volume_id = persistent_outputs.get("VolumeId")
+    allocation_id = persistent_outputs.get("AllocationId")
+    public_ip = persistent_outputs.get("PublicIp")
 
-    # Build parameters list and stack name before the summary so dry-run has the full picture
-    parameters = [{"ParameterKey": "ServerPortNumberStart", "ParameterValue": str(args.port_start)},
-                  {"ParameterKey": "ServerPortNumberEnd", "ParameterValue": str(args.port_end)},
-                  {"ParameterKey": "SetupCommand", "ParameterValue": args.setup_command},
-                  {"ParameterKey": "ExistingVolumeId", "ParameterValue": final_volume_id},
-                  {"ParameterKey": "InstanceType", "ParameterValue": args.instance_type},
-                  {"ParameterKey": "AvailabilityZone", "ParameterValue": availability_zone}]
+    if not volume_id:
+        logger.error("VolumeId not found in persistent stack outputs. Has setup_persistent_stack.py been run?")
+        sys.exit(1)
+    if not allocation_id:
+        logger.error("AllocationId not found in persistent stack outputs.")
+        sys.exit(1)
+
+    logger.info("Persistent stack outputs — VolumeId: %s  AllocationId: %s  PublicIp: %s",
+                volume_id, allocation_id, public_ip)
+
+    # Derive AvailabilityZone from the volume to pin the instance to the correct AZ
+    logger.info("Detecting Availability Zone for volume %s...", volume_id)
+    availability_zone = get_volume_az(ec2_client, volume_id)
+    logger.info("Volume is in Availability Zone: %s", availability_zone)
+
+    parameters = [
+        {"ParameterKey": "ServerPortNumberStart", "ParameterValue": str(args.port_start)},
+        {"ParameterKey": "ServerPortNumberEnd", "ParameterValue": str(args.port_end)},
+        {"ParameterKey": "SetupCommand", "ParameterValue": args.setup_command},
+        {"ParameterKey": "PersistentStackName", "ParameterValue": args.persistent_stack},
+        {"ParameterKey": "InstanceType", "ParameterValue": args.instance_type},
+        {"ParameterKey": "AvailabilityZone", "ParameterValue": availability_zone},
+    ]
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     new_stack_name = f"{STACK_PREFIX}-{timestamp}"
 
     # Parameter summary — always emitted to stderr regardless of dry-run or --yes
     logger.info("Ready to create stack %s.", new_stack_name)
-    logger.info("  Parameters:")
-    logger.info("    ServerPortNumberStart: %s", args.port_start)
-    logger.info("    ServerPortNumberEnd:   %s", args.port_end)
-    logger.info("    SetupCommand:          %s", args.setup_command)
-    logger.info("    ExistingVolumeId:      '%s'", final_volume_id)
-    logger.info("    InstanceType:          %s", args.instance_type)
-    logger.info("    AvailabilityZone:      %s", availability_zone)
+    logger.info("  PersistentStackName:   %s", args.persistent_stack)
+    logger.info("  PublicIp:              %s  (stable across reinstalls)", public_ip)
+    logger.info("  AvailabilityZone:      %s  (derived from persistent volume)", availability_zone)
+    logger.info("  ServerPortNumberStart: %s", args.port_start)
+    logger.info("  ServerPortNumberEnd:   %s", args.port_end)
+    logger.info("  SetupCommand:          %s", args.setup_command)
+    logger.info("  InstanceType:          %s", args.instance_type)
 
     # Not executing: emit structured result and stop before any remaining state writes
     if not args.execute:
@@ -332,6 +327,7 @@ def main():
             "dry_run": True,
             "would_delete": deleted_stack_name,
             "new_stack_name": new_stack_name,
+            "persistent_stack": args.persistent_stack,
             "parameters": {p["ParameterKey"]: p["ParameterValue"] for p in parameters},
         }
         print(yaml.dump(result, default_flow_style=False, sort_keys=False))
@@ -353,7 +349,7 @@ def main():
 
     create_stack(cf_client, new_stack_name, template_body, parameters)
 
-    # Emit stack outputs as structured JSON on stdout
+    # Emit stack outputs as structured YAML on stdout
     outputs = get_stack_outputs(cf_client, new_stack_name)
     result = {
         "stack_name": new_stack_name,

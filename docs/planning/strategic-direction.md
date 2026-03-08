@@ -52,6 +52,9 @@ tested, reliable execution sequences.
   personal state only: active volume ID, ports, jar URL, redeployment runbook with real
   values. Playbooks are now viable — their prerequisites are in source-controlled context
   rather than private memory that may or may not be loaded.
+- **Persistent EIP + EBS stack** — resolved 2026-03-08. `GamePersistentStack` owns the EBS
+  volume and EIP; game stack is now fully stateless. Reinstalls no longer affect the IP or
+  world data. End-to-end rebuild verified with world data intact. See CHANGELOG.md.
 
 **What remains:**
 - Named playbooks — discrete, tested task sequences that map to natural-language intents;
