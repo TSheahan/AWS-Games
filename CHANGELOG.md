@@ -5,6 +5,48 @@ provide finer-grained detail; this log captures intent and trajectory.
 
 ---
 
+## 2026-03-08 — Mobile control API and workstation instance control
+
+**Mobile start/stop control API (`cloudformation_control_api_stack.yaml` + `bin/deploy_control_api.py`)**
+
+- Added `cloudformation_control_api_stack.yaml` — a stable, independently deployed CloudFormation
+  stack exposing a Lambda Function URL for starting and stopping the game server EC2 instance from
+  Android home screen shortcuts (capability URL pattern: the bookmark IS the credential)
+- Lambda function (`GameControlApi`, python3.12) performs dynamic GameStack lookup at call time —
+  no hardcoded instance ID; resolves active stack → `ServerInstance` resource → instance ID
+- API key validated from `?key=<value>` query string before any AWS call; scoped to EC2
+  start/stop only; `NoEcho: true` parameter prevents key appearing in CF console or logs
+- Deployed to ap-southeast-2 (Sydney) — `AWS::Lambda::Url` is unavailable in ap-southeast-4
+  (Melbourne) at both CF template and API levels as of 2026-03; Lambda's EC2/CF clients target
+  Melbourne explicitly via `region_name="ap-southeast-4"` — cross-region boto3 calls are standard
+- Root cause of all 403 Forbidden failures traced to an October 2025 AWS breaking change: new
+  Function URLs require both `lambda:InvokeFunctionUrl` AND `lambda:InvokeFunction` in the
+  resource-based policy; both permissions present as `ControlApiFunctionUrlPermission` and
+  `ControlApiInvokeFunctionPermission`
+- `Metadata` block documents RegionalWorkaround (Sydney rationale, cross-region mechanics,
+  migration path back to Melbourne, two-permission requirement history) and SecurityModel
+  (capability URL pattern rationale, threat model, API Gateway comparison, residual risks)
+- Added `bin/deploy_control_api.py` — create-or-update deployer; `--execute` required for state
+  changes (safe by default); API key via `--api-key` or `getpass` prompt; key never logged;
+  prints shortcut URLs on success
+- API Gateway HTTP API fallback plan frozen in private memory (`api-gateway-plan.md`) — do not
+  implement unless Lambda Function URL definitively fails
+
+**Workstation instance control wrapper (`bin/instance.py`)**
+
+- Added `bin/instance.py` — resolves the current `GameStack-*` EC2 instance ID from
+  CloudFormation at call time; OS shortcuts pointing at this script survive stack reinstalls
+  without modification (no stored instance ID)
+- Subcommands: `start`, `stop`, `reboot`, `status` (state / public IP / uptime), `ssh`
+- `ssh` uses `os.execvp` to replace the Python process cleanly — no subprocess wrapper
+- `ssh` connects to the `ServerIP` stack output (Elastic IP) rather than the transient public
+  IP — stable across stop/start cycles
+- `--pause SECONDS` flag sleeps after completion for `.lnk` shortcut invocations where the
+  terminal closes immediately on exit; not applicable to `ssh` (process replaced by execvp)
+- `--profile` flag consistent with existing `bin/` tooling
+
+---
+
 ## 2026-03-08 — `minecraft-autoshutdown` idle-shutdown service
 
 - Added `ec2/minecraft/minecraft-autoshutdown` — shuts down the EC2 instance when all

@@ -29,6 +29,9 @@ Metadata:
     This was the root cause of all 403 Forbidden failures observed during development
     across us-east-1, ap-southeast-2, and ap-southeast-4. Both permissions are present
     in this template.
+    
+    # TODO: revisit the prospect that ap-southeast-4 does support deployment of this
+      stack - prior work cleared a config issue misdiagnosed as a region support issue.
 
 
   SecurityModel: |

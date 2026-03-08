@@ -5,33 +5,6 @@ distinct value in the solving. Pick up opportunistically.
 
 ---
 
-## Workstation instance/stack control interface
-
-**Pain point:** After a stack reinstall, any hardcoded instance ID becomes stale —
-including OS shortcuts (Windows `.lnk` Target fields) used to start/stop the instance.
-The user must manually look up the new ID before any direct AWS CLI invocation works.
-
-**Root fix — dynamic lookup wrapper** (`bin/instance.py` or `bin/stack.py`):
-Resolves the current `GameStack-*` instance ID at call time, never storing it. Shortcuts
-point at the wrapper, so they survive reinstalls without modification.
-
-Proposed operations:
-- `start` / `stop` / `reboot` — maps to `ec2 start/stop/reboot-instances`
-- `status` — instance state, public IP, uptime
-- `ssh` — opens an SSH session using the current EIP output from the stack
-
-**Interim / complementary — post-deploy output from `reinstall_stack.py`:**
-At `CREATE_COMPLETE`, print ready-to-use shortcut Target strings alongside the existing
-stack outputs. Gives the user copy-pasteable correct values immediately after a reinstall,
-reducing the window where stale IDs cause confusion even before the wrapper exists.
-
-**Design considerations:**
-- Instance ID is derived from stack resources at call time, never stored or cached
-- Reuse the stack-discovery logic already present in `reinstall_stack.py`
-- `--profile` passthrough consistent with existing `bin/` tooling
-
----
-
 ## Enhanced /usage view
 
 **Pain point:** `/usage` shows current consumption but gives no sense of how far the weekly
