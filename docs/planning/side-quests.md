@@ -162,3 +162,39 @@ feedback loop on a provision run without manual intervention.
 - Which logs are most signal-dense? cloud-init-output.log covers UserData; minecraft-provision.log covers provision_servers.py; setup.sh output goes to cloud-init-output.log too since it runs inside UserData.
 - Tail only (last N lines) or full retrieval?
 - Failure detection: scan logs for known error patterns and surface a summary rather than raw output?
+
+---
+
+## Composable setup command
+
+**Pain point:** `--setup-command` is a single opaque shell string the caller must assemble
+by hand every deploy, packing four concerns into one value: script path, server version,
+JAR URL, and Java package.
+
+**Observation:** Script path and Java package are effectively static (change with a new game
+type or a major Java bump — years apart). Server version is sticky across deploys. JAR URL
+is per-version but tightly coupled to server version. The full string is redundant most of
+the time.
+
+**Decomposition:** `reinstall_stack.py` gains first-class arguments (`--game-type`,
+`--server-version`, `--jar-url`, `--java-package`) with defaults where natural. It composes
+them into the `SetupCommand` string internally. Raw `--setup-command` stays as an escape
+hatch, mutually exclusive with the composed form.
+
+**Server setup as a post-instantiation concern:** JAR URL and server version are the volatile
+components, and they're purely server-setup concerns — they don't affect infrastructure
+provisioning. Moving server setup out of UserData into a post-boot action (e.g.
+`instance.py setup`) would:
+- Let the instance stand up faster (UserData stops at volume mount + git clone)
+- Make setup retryable without stack recreation (setup.sh is already idempotent)
+- Give real-time visible output instead of buried cloud-init logs
+- Naturally house the version/URL arguments where they belong — on the server setup
+  command, not the infrastructure provisioning command
+
+Zero-touch first deploys can be preserved: UserData invokes setup by default, `instance.py
+setup` is the re-run / iterate path. The two improvements (composable arguments, post-boot
+setup path) are orthogonal.
+
+**Open questions:**
+- Should composed arguments also persist in a config file to reduce repetition further?
+- `instance.py setup` scope: full setup.sh, or targetable sub-steps (e.g. re-provision only)?
