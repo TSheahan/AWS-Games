@@ -1,6 +1,6 @@
 # AWS-Games Strategic Direction
 
-Last reviewed: 2026-03-05
+Last reviewed: 2026-03-08
 
 ---
 
@@ -34,38 +34,30 @@ portfolio signal. Don't extend for its own sake.
 ### Priority 1 — Build agentic operational patterns
 
 *(Priority 0 was validating the provisioning chain end-to-end — completed 2026-03-04.
-See CHANGELOG.md for the full account. Priority 1 is now unblocked.)*
+See CHANGELOG.md for the full account.)*
 
 Claude Code as the control plane for routine infrastructure ops. Natural-language commands
 ("start the game server", "check server status", "redeploy with version X") map to
 tested, reliable execution sequences.
 
-The agentic layer is only credible once the underlying workflows are validated — which they
-now are (see CHANGELOG.md, 2026-03-04).
+**Progress within Priority 1 (2026-03-08):**
 
-**Shape of the agentic layer (emerging):**
-- Operational runbooks in a Claude-executable form (operations.md is a start)
-- Named playbooks — discrete, tested task sequences that map to natural-language intents
+- `bin/instance.py` — workstation-side instance control; resolves the current stack at call
+  time, so OS shortcuts survive reinstalls without modification
+- Mobile control API — Lambda Function URL for start/stop from Android home screen shortcuts;
+  no credential management required (capability URL pattern)
+- **Operational knowledge split** — resolved 2026-03-08. `memory/operations.md` previously
+  mixed personal state with system procedures; procedures migrated into the CLAUDE.md
+  hierarchy (source-controlled, auto-loaded on every machine). `operations.md` now holds
+  personal state only: active volume ID, ports, jar URL, redeployment runbook with real
+  values. Playbooks are now viable — their prerequisites are in source-controlled context
+  rather than private memory that may or may not be loaded.
+
+**What remains:**
+- Named playbooks — discrete, tested task sequences that map to natural-language intents;
+  provisioning log retrieval is the natural first one (stack creates → SSH in → retrieve
+  logs → surface failures)
 - Precondition checks before each operation (is the stack up? volume available? SSH reachable?)
-
-**Open design question — operational knowledge architecture:**
-
-The current private memory (`memory/operations.md`) mixes two categories with different
-durability needs:
-
-- **Personal workstation state:** key paths, current volume ID, active run config parameters.
-  This is correctly private — it changes, it's machine-specific.
-- **Operational procedures:** SSH commands, systemd patterns, log locations, provisioning
-  workflows. These are purely about the system, not the workstation. They're derivable from
-  the repo and equally valid on any machine.
-
-An agentic layer that depends on private memory being loaded correctly is fragile. Procedures
-should be in source-controlled CLAUDE.md (auto-loaded in every session, every machine). Only
-personal state belongs in private memory.
-
-**Prerequisite:** do the split first. Migrate procedures into the project CLAUDE.md (or a
-dedicated `docs/runbook.md` if volume warrants it). Shrink `operations.md` to personal state
-only. Playbooks that exist only in private memory aren't really playbooks.
 
 ---
 

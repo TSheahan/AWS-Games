@@ -5,6 +5,37 @@ provide finer-grained detail; this log captures intent and trajectory.
 
 ---
 
+## 2026-03-08 — CLAUDE.md hierarchy maintenance and strategic planning update
+
+**Operational knowledge split — `memory/operations.md` → CLAUDE.md hierarchy**
+
+The strategic direction had flagged this as a prerequisite for agentic operational patterns:
+private memory was mixing personal workstation state with system procedures, making playbooks
+fragile (dependent on private memory being loaded). Split completed:
+
+- `memory/operations.md` trimmed to personal state only: active volume ID, ports, JAR URL,
+  redeployment runbook with real values. All procedure content removed.
+- Root `CLAUDE.md` updated: fixed stale screen session names (was generic `screen -S minecraft`;
+  corrected to per-server `minecraft-<server_id>`); File Map brought current — removed deleted
+  `mcstatus.sh`, added `cloudformation_control_api_stack.yaml`, `bin/instance.py`,
+  `bin/deploy_control_api.py`, `ec2/minecraft/minecraft`, `minecraft-completion.bash`,
+  `minecraft-autoshutdown`; added log locations, port range constraint, EBS mount prerequisite,
+  SSH access, and first-deploy steps checklist to Operational Notes.
+- `ec2/minecraft/CLAUDE.md` updated: added JVM flags to generated start script documentation,
+  added `journalctl` commands to the systemd integration section, added design principle
+  section (provision_servers.py owns all server-specific setup).
+
+**`docs/planning/strategic-direction.md` update**
+
+- Marked the operational knowledge split as resolved with outcome documented
+- Added `bin/instance.py` and mobile control API as Priority 1 deliveries (previously
+  undocumented in the planning file)
+- Removed the resolved open design question and prerequisite
+- Focused "what remains" on named playbooks and precondition checks; provisioning log
+  retrieval named as the natural first playbook
+
+---
+
 ## 2026-03-08 — Mobile control API and workstation instance control
 
 **Mobile start/stop control API (`cloudformation_control_api_stack.yaml` + `bin/deploy_control_api.py`)**

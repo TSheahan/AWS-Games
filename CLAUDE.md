@@ -44,11 +44,16 @@ Developer workstation
 
 | Path | Runs on | Purpose |
 |---|---|---|
-| `cloudformation_server_stack.yaml` | AWS | IaC template; creates EC2, EBS, EIP, SG |
+| `cloudformation_server_stack.yaml` | AWS | Main game server IaC template; creates EC2, EBS, EIP, SG |
+| `cloudformation_control_api_stack.yaml` | AWS | Lambda Function URL stack for mobile start/stop control |
 | `bin/reinstall_stack.py` | Workstation | Delete old stack, create new timestamped stack |
-| `ec2/minecraft/provision_servers.py` | EC2 instance (root) | Multi-server systemd unit management |
-| `ec2/minecraft/mcstatus.sh` | EC2 instance | Quick status display of all minecraft-*.service units |
+| `bin/instance.py` | Workstation | Resolve and control the game server EC2 instance (start/stop/reboot/status/ssh) |
+| `bin/deploy_control_api.py` | Workstation | Deploy or update the mobile control API CloudFormation stack |
 | `ec2/minecraft/setup.sh` | EC2 instance (root, via UserData) | Instance-level setup: Java install, JAR download, invokes provision_servers.py |
+| `ec2/minecraft/provision_servers.py` | EC2 instance (root) | Multi-server systemd unit management |
+| `ec2/minecraft/minecraft` | EC2 instance | Admin wrapper; installed to `/home/ec2-user/bin/minecraft` |
+| `ec2/minecraft/minecraft-completion.bash` | EC2 instance | Bash completion drop-in; installed to `/etc/bash_completion.d/` |
+| `ec2/minecraft/minecraft-autoshutdown` | EC2 instance | Idle-detection shutdown script (oneshot service + 30-min timer) |
 | `ec2/update-release.sh` | EC2 instance (ec2-user) | AL2023 release version upgrade helper |
 | `requirements.txt` | Workstation | boto3, pyyaml, botocore |
 
@@ -115,13 +120,27 @@ provisioned:
 
 ## Operational Notes
 
-- **EULA:** Must be accepted manually after first deploy — SSH in and set `eula=true` in `eula.txt`
+- **EULA:** Must be accepted manually after first deploy — SSH in and set `eula=true` in `eula.txt` in each server's working directory under `/mnt/persist/minecraft/`
 - **Volume retention:** EBS has `DeletionPolicy: Retain`; always check for orphan volumes after teardown
 - **AZ pinning:** `reinstall_stack.py` auto-detects volume AZ to prevent attachment failures on reuse
-- **Screen sessions:** Minecraft runs in `screen -S minecraft`; connect via `screen -r minecraft`
+- **Screen sessions:** Per-server sessions named `minecraft-<server_id>`; use `minecraft screen <instance>` (preferred) or `screen -r minecraft-<server_id>` (direct); detach with Ctrl+A, D
 - **Java version:** Java 21 (Corretto) for Minecraft 1.21.x; comment in setup.sh notes 2026 versioning may require Java 25
-- **Root required:** `provision_servers.py` and `setup.sh` must run as root on the instance
+- **Root required:** `provision_servers.py` and `setup.sh` must run as root on the instance; both abort if `/mnt/persist` is not mounted
 - **Single stack constraint:** Script errors if multiple `GameStack-*` stacks exist simultaneously
+- **Port range constraint:** game port numbers in `minecraft-servers.yaml` must fall within the `GAME_PORT_START`–`GAME_PORT_END` CloudFormation range
+- **Log locations:** UserData → `/var/log/cloud-init-output.log`; provisioning → `/var/log/minecraft-provision.log` (world-readable); server console → `/mnt/persist/minecraft/<folder>/console_YYYY-MM-DD_HH-MM-SS.log`
+- **SSH access:** `python bin/instance.py ssh` (preferred; resolves current IP automatically); fallback: `ssh -i ~/.ssh/tim_ssh_to_game_server ec2-user@<ServerIP>`
+
+### First-deploy steps
+
+Before running `reinstall_stack.py`:
+- Confirm `tim_ssh_to_game_server` key pair exists in `ap-southeast-4`
+- Prepare `GAME_SETUP_COMMAND`; for volume reuse, set `GAME_EXISTING_VOLUME_ID` or pass `--existing-volume-id`
+
+After `CREATE_COMPLETE`:
+1. SSH in: `python bin/instance.py ssh`
+2. Accept EULA: set `eula=true` in `eula.txt` in each server folder under `/mnt/persist/minecraft/`
+3. Start servers: `minecraft start <server_id>`
 
 ---
 
