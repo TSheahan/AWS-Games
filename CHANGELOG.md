@@ -5,6 +5,32 @@ provide finer-grained detail; this log captures intent and trajectory.
 
 ---
 
+## 2026-03-09 — `minecraft autoshutdown` subcommand
+
+- Added `minecraft autoshutdown` subcommand to the EC2 admin wrapper with four
+  sub-subcommands:
+  - `status` — timer enabled/active state (emoji-annotated, aligned with `minecraft status`
+    visual style), next trigger time, and last run exit code
+  - `logs [N]` — last N runs from the systemd journal (default: 3); run boundaries
+    detected by the `=== minecraft-autoshutdown run at ... ===` delimiter emitted by the
+    script; fetches a 500-line buffer from journald (`--output=cat`) and slices from the
+    Nth-last run header to end
+  - `run [--dry-run]` — manual one-shot trigger (`sudo /usr/local/bin/minecraft-autoshutdown`);
+    `--dry-run` passed through to the underlying script
+  - `enable` / `disable` — toggle the idle-shutdown timer via
+    `systemctl enable/disable --now minecraft-autoshutdown.timer`
+- `minecraft status` (all-instances, non-YAML mode) now appends a summary row after the
+  server table: enabled/disabled state, next trigger time, last run exit code — ambient
+  awareness without requiring `minecraft autoshutdown status`
+- `minecraft status --yaml` (all-instances) now appends an `autoshutdown:` block with
+  `enabled`, `next_trigger`, and `last_exit` fields for agent consumption
+- `minecraft-completion.bash` extended: `autoshutdown` added to top-level subcommands;
+  sub-subcommands complete at word 2; `--dry-run` completes for `autoshutdown run`;
+  fixed missing `grep -v '^minecraft-autoshutdown\.service$'` filter in the completion's
+  instance query (the wrapper's `_list_instances` already had this; the completion did not)
+
+---
+
 ## 2026-03-08 — Persistent EIP + EBS stack
 
 **GamePersistentStack — EIP and EBS volume moved out of the ephemeral game stack**

@@ -5,11 +5,13 @@
 # Usage: minecraft <subcommand> [instance] [--yaml]
 #
 # Subcommands:
-#   status [instance] [--yaml]   Show status of all servers, or one specific server
-#   start  [instance]            Start all servers, or one specific server
-#   stop   [instance]            Stop all servers, or one specific server
-#   screen <instance>            Attach to a running server's screen session
-#   reprovision                  Pull latest config and re-provision all servers
+#   status [instance] [--yaml]               Show status of all servers, or one specific server
+#   start  [instance]                        Start all servers, or one specific server
+#   stop   [instance]                        Stop all servers, or one specific server
+#   screen <instance>                        Attach to a running server's screen session
+#   reprovision                              Pull latest config and re-provision all servers
+#   autoshutdown <status|logs|run|enable|disable> [args]
+#                                            Inspect and control the idle-shutdown timer
 
 set -euo pipefail
 
@@ -57,6 +59,30 @@ _status_one_yaml() {
 
 
 # ------------------------------------------------------------------------------
+# Autoshutdown helpers
+# ------------------------------------------------------------------------------
+
+# Return "enabled", "disabled", etc. for the autoshutdown timer
+_autoshutdown_enabled() {
+    systemctl is-enabled minecraft-autoshutdown.timer 2>/dev/null || true
+}
+
+# Return "DATE TIME TZ" for the next scheduled trigger, or "n/a"
+_autoshutdown_next_trigger() {
+    local row
+    row=$(systemctl list-timers --no-legend --no-pager minecraft-autoshutdown.timer 2>/dev/null | head -1)
+    [[ -n "$row" ]] && awk '{print $1, $2, $3}' <<< "$row" || echo "n/a"
+}
+
+# Return "exit N" for the last run exit code, or "n/a"
+_autoshutdown_last_exit() {
+    local code
+    code=$(systemctl show minecraft-autoshutdown.service --property=ExecMainStatus --value 2>/dev/null || true)
+    [[ "$code" =~ ^[0-9]+$ ]] && echo "exit $code" || echo "n/a"
+}
+
+
+# ------------------------------------------------------------------------------
 # Subcommand implementations
 # ------------------------------------------------------------------------------
 
@@ -80,6 +106,11 @@ cmd_status() {
             _list_instances | sort | while read -r inst; do
                 _status_one_yaml "$inst"
             done
+            # Autoshutdown summary for agent consumption
+            printf "autoshutdown:\n"
+            printf "  enabled: %s\n" "$(_autoshutdown_enabled)"
+            printf "  next_trigger: %s\n" "$(_autoshutdown_next_trigger)"
+            printf "  last_exit: %s\n" "$(_autoshutdown_last_exit)"
         fi
     else
         if [[ -n "$instance" ]]; then
@@ -88,6 +119,18 @@ cmd_status() {
             _list_instances | while read -r inst; do
                 _status_one "$inst"
             done | sort -k1
+            # Autoshutdown summary row — ambient awareness that the mechanism exists
+            local enabled next_t last_e mark
+            enabled=$(_autoshutdown_enabled)
+            next_t=$(_autoshutdown_next_trigger)
+            last_e=$(_autoshutdown_last_exit)
+            case "$enabled" in
+                enabled)  mark="🟢 enabled"  ;;
+                disabled) mark="⚪ disabled" ;;
+                *)        mark="❓ $enabled" ;;
+            esac
+            echo ""
+            printf "%-28s %s   next: %s   last: %s\n" "autoshutdown.timer" "$mark" "$next_t" "$last_e"
         fi
     fi
 }
@@ -135,6 +178,93 @@ cmd_reprovision() {
     sudo python3 "$PROVISION_SCRIPT" --update --provision
 }
 
+cmd_autoshutdown_status() {
+    local enabled active next_t last_e mark_e mark_a
+    enabled=$(_autoshutdown_enabled)
+    active=$(systemctl is-active minecraft-autoshutdown.timer 2>/dev/null || true)
+    next_t=$(_autoshutdown_next_trigger)
+    last_e=$(_autoshutdown_last_exit)
+
+    case "$enabled" in
+        enabled)  mark_e="🟢 enabled"  ;;
+        disabled) mark_e="⚪ disabled" ;;
+        *)        mark_e="❓ $enabled" ;;
+    esac
+    case "$active" in
+        active)   mark_a="🟢 active"   ;;
+        inactive) mark_a="⚪ inactive"  ;;
+        *)        mark_a="❓ $active"   ;;
+    esac
+
+    printf "%-28s %s / %s\n" "autoshutdown.timer" "$mark_e" "$mark_a"
+    printf "  %-16s %s\n" "next trigger:" "$next_t"
+    printf "  %-16s %s\n" "last run:" "$last_e"
+}
+
+cmd_autoshutdown_logs() {
+    local n_runs="${1:-3}"
+    if ! [[ "$n_runs" =~ ^[0-9]+$ ]] || [[ "$n_runs" -eq 0 ]]; then
+        echo "Usage: minecraft autoshutdown logs [N]  (N must be a positive integer)" >&2
+        exit 1
+    fi
+
+    # Fetch a generous buffer; each run is typically 10–30 lines
+    local raw
+    raw=$(journalctl -u minecraft-autoshutdown.service --no-pager -n 500 --output=cat 2>/dev/null || true)
+    if [[ -z "$raw" ]]; then
+        echo "No autoshutdown log entries found."
+        return
+    fi
+
+    # Collect line numbers of run-start headers (delimiter emitted by minecraft-autoshutdown)
+    local -a starts=()
+    local line_num=0
+    while IFS= read -r line; do
+        (( ++line_num ))
+        [[ "$line" == "=== minecraft-autoshutdown run at"* ]] && starts+=("$line_num")
+    done <<< "$raw"
+
+    if [[ ${#starts[@]} -eq 0 ]]; then
+        echo "No completed run boundaries found in autoshutdown journal."
+        return
+    fi
+
+    # Select the last n_runs starts and print from there to end
+    local total=${#starts[@]}
+    local skip=$(( total - n_runs ))
+    [[ $skip -lt 0 ]] && skip=0
+    local first_line=${starts[$skip]}
+
+    echo "$raw" | tail -n +"$first_line"
+}
+
+cmd_autoshutdown_run() {
+    local -a flags=()
+    for arg in "$@"; do
+        case "$arg" in
+            --dry-run) flags+=("--dry-run") ;;
+            *) echo "Unknown argument: $arg" >&2; exit 1 ;;
+        esac
+    done
+    sudo /usr/local/bin/minecraft-autoshutdown "${flags[@]}"
+}
+
+cmd_autoshutdown() {
+    if [[ $# -eq 0 ]]; then
+        echo "Usage: minecraft autoshutdown <status|logs|run|enable|disable> [args]" >&2
+        exit 1
+    fi
+    local sub="$1"; shift
+    case "$sub" in
+        status)  cmd_autoshutdown_status ;;
+        logs)    cmd_autoshutdown_logs "$@" ;;
+        run)     cmd_autoshutdown_run "$@" ;;
+        enable)  sudo systemctl enable --now minecraft-autoshutdown.timer && echo "autoshutdown timer enabled." ;;
+        disable) sudo systemctl disable --now minecraft-autoshutdown.timer && echo "autoshutdown timer disabled." ;;
+        *)       echo "Unknown autoshutdown subcommand: $sub" >&2; exit 1 ;;
+    esac
+}
+
 
 # ------------------------------------------------------------------------------
 # Dispatch
@@ -145,11 +275,15 @@ usage() {
 Usage: minecraft <subcommand> [instance] [--yaml]
 
 Subcommands:
-  status [instance] [--yaml]   Show status of all servers, or one specific server
-  start  [instance]            Start all servers, or one specific server
-  stop   [instance]            Stop all servers, or one specific server
-  screen <instance>            Attach to a running server's screen session
-  reprovision                  Pull latest config and re-provision all servers
+  status [instance] [--yaml]               Show status of all servers, or one specific server
+  start  [instance]                        Start all servers, or one specific server
+  stop   [instance]                        Stop all servers, or one specific server
+  screen <instance>                        Attach to a running server's screen session
+  reprovision                              Pull latest config and re-provision all servers
+  autoshutdown status                      Timer state, next trigger, last run exit code
+  autoshutdown logs [N]                    Last N runs from journal (default: 3)
+  autoshutdown run [--dry-run]             Manual one-shot trigger
+  autoshutdown enable|disable              Toggle the idle-shutdown timer
 USAGE
     exit 1
 }
@@ -160,10 +294,11 @@ subcommand="$1"
 shift
 
 case "$subcommand" in
-    status)      cmd_status "$@" ;;
-    start)       cmd_start "$@" ;;
-    stop)        cmd_stop "$@" ;;
-    screen)      cmd_screen "$@" ;;
-    reprovision) cmd_reprovision ;;
-    *)           usage ;;
+    status)       cmd_status "$@" ;;
+    start)        cmd_start "$@" ;;
+    stop)         cmd_stop "$@" ;;
+    screen)       cmd_screen "$@" ;;
+    reprovision)  cmd_reprovision ;;
+    autoshutdown) cmd_autoshutdown "$@" ;;
+    *)            usage ;;
 esac

@@ -4,7 +4,7 @@
 
 _minecraft_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
-    local subcommands="status start stop screen reprovision"
+    local subcommands="status start stop screen reprovision autoshutdown"
 
     if [[ ${COMP_CWORD} -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$subcommands" -- "$cur") )
@@ -14,7 +14,9 @@ _minecraft_complete() {
     local subcmd="${COMP_WORDS[1]}"
     local instances
     instances=$(systemctl list-unit-files --no-legend 'minecraft-*.service' 2>/dev/null \
-        | awk '{print $1}' | sed 's/^minecraft-//;s/\.service$//')
+        | awk '{print $1}' \
+        | grep -v '^minecraft-autoshutdown\.service$' \
+        | sed 's/^minecraft-//;s/\.service$//')
 
     case "$subcmd" in
         status)
@@ -30,6 +32,19 @@ _minecraft_complete() {
             ;;
         start|stop|screen)
             COMPREPLY=( $(compgen -W "$instances" -- "$cur") )
+            ;;
+        autoshutdown)
+            if [[ ${COMP_CWORD} -eq 2 ]]; then
+                COMPREPLY=( $(compgen -W "status logs run enable disable" -- "$cur") )
+            elif [[ ${COMP_CWORD} -ge 3 && "${COMP_WORDS[2]}" == "run" ]]; then
+                # --dry-run is the only option; suppress once already present
+                local dry_run_used=false
+                local w
+                for w in "${COMP_WORDS[@]}"; do
+                    [[ "$w" == "--dry-run" ]] && dry_run_used=true
+                done
+                $dry_run_used || COMPREPLY=( $(compgen -W "--dry-run" -- "$cur") )
+            fi
             ;;
     esac
 }

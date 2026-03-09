@@ -56,51 +56,20 @@ All checks confirmed on live server:
 
 ---
 
-## `minecraft autoshutdown` subcommand
+## `minecraft autoshutdown` subcommand — COMPLETE (2026-03-09)
 
-**Background:** `minecraft-autoshutdown` (script + systemd timer, `--dry-run` supported)
-is deployed and validated. The raw operations are still invoked directly via `systemctl`
-and `journalctl`. Add a `minecraft autoshutdown` subcommand to the wrapper to eliminate
-that.
-
-**Subcommands:**
-- `status` — timer enabled/active state, next trigger time, last run exit code; align
-  visually with the emoji+table format of `minecraft status`
-- `logs [N]` — last N *runs* from journald (`journalctl -u minecraft-autoshutdown.service`);
-  default to enough to cover ~3 full runs; each run is delimited by the
-  `=== minecraft-autoshutdown run at ... ===` header the script emits
-- `run [--dry-run]` — manual one-shot trigger without affecting the timer schedule
-  (`sudo /usr/local/bin/minecraft-autoshutdown`)
-- `disable` / `enable` — toggle the timer
-  (`systemctl disable/enable --now minecraft-autoshutdown.timer`)
-
-**`minecraft status` integration:**
-Add a summary row to the general status table so the autoshutdown mechanism stays visible
-during routine health checks — maintaining user recall that the mechanism exists. One line
-is enough: enabled/disabled state, next trigger time, and last run exit code. Example:
-
-```
-autoshutdown  enabled   next: 2026-03-08 14:00 AEDT  last: exit 0
-```
-
-This is intentionally lighter than `minecraft autoshutdown status` (the full deep-dive);
-the goal is ambient awareness, not a duplicate view.
+Implemented. `minecraft autoshutdown status|logs [N]|run [--dry-run]|enable|disable`
+added to the wrapper; `minecraft status` now appends an autoshutdown summary row (and
+`autoshutdown:` block in `--yaml` mode) when showing all instances. Bash completion
+extended with subcommands and `--dry-run`; missing `grep -v` filter for
+`minecraft-autoshutdown.service` in the completion's instance query also fixed. See
+CHANGELOG.md.
 
 **TODO (low priority) — per-server idle state in `minecraft status`:**
 Surface idle detection state alongside running/stopped status — i.e. whether each server
 is currently considered idle by the autoshutdown logic (no players, pause signal seen in
 console log tail). Reuse the detection logic from `minecraft-autoshutdown` rather than
-re-implementing it. Useful for understanding why an autoshutdown did or did not fire without
-having to read the autoshutdown logs directly.
-
-**Bash completion extension:**
-Add `autoshutdown` (with its subcommands and `--dry-run`) to `minecraft-completion.bash`.
-
-**Open design questions:**
-- `minecraft autoshutdown status`: surface both last-trigger and next-trigger, or just
-  next-trigger alongside exit code?
-- `logs N`: run count confirmed as the right unit — requires parsing the delimiter header
-  to slice correctly.
+re-implementing it.
 
 ---
 

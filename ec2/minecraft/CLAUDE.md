@@ -59,7 +59,7 @@ Installed by `setup.sh` to `/home/ec2-user/bin/minecraft` (on PATH). Bash comple
 drop-in installed to `/etc/bash_completion.d/minecraft`.
 
 **Subcommands:** `status [instance] [--yaml]`, `start [instance]`, `stop [instance]`,
-`screen <instance>`, `reprovision`
+`screen <instance>`, `reprovision`, `autoshutdown <status|logs [N]|run [--dry-run]|enable|disable>`
 
 `status` without `--yaml` prints an emoji-annotated table. `--yaml` emits machine-readable
 output suitable for agent consumption. `reprovision` calls `provision_servers.py` via sudo.
