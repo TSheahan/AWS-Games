@@ -134,6 +134,48 @@ feedback loop on a provision run without manual intervention.
 
 ---
 
+## Control API — content-negotiated responses
+
+**Pain point:** The control Lambda (`cloudformation_control_api_stack.yaml`) returns raw
+JSON for all responses. This is fine for programmatic callers but poor UX when tapped from
+a mobile home screen shortcut — the browser renders a wall of JSON.
+
+**Goal:** Read the `Accept` header and return the appropriate format:
+- `Accept: application/yaml` (or `text/yaml`) → YAML response body
+- `Accept: text/html` (or browser default `*/*`) → a minimal, mobile-friendly HTML outcome
+  page showing the action taken, instance state, and a clear success/error indication
+- `Accept: application/json` (or unrecognised) → current JSON behaviour (backward compatible)
+
+**Implementation notes:**
+- The `Accept` header is available in Lambda Function URL events at
+  `event["headers"]["accept"]`
+- YAML output: `yaml.dump()` is available if `pyyaml` is vendored inline or the response is
+  hand-formatted (simple enough structure to template as a string)
+- HTML page: inline in the Lambda response body; keep it self-contained (no external CSS/JS).
+  Mobile-first: large text, high-contrast status colour (green for started, red for stopped,
+  amber for error), minimal layout
+- Error responses (403, 400, 500) should also respect `Accept` — a browser hitting a bad key
+  should see a readable page, not `{"error": "forbidden"}`
+
+**`Accept` header vs `?format=` query param:**
+The `Accept` header already covers every real caller naturally:
+- Mobile bookmark tap → browser sends `text/html` by default → HTML page
+- `curl` / scripts → trivial to set `Accept: application/json` or `application/yaml`
+- Unrecognised or absent → fall back to JSON (backward compatible)
+
+A `?format=` param would be a second mechanism for the same dispatch, adding a code path
+and a precedence question (`?format=` wins? `Accept` wins? error on conflict?) for no
+concrete use case where `Accept` is insufficient. The URL already carries `?action=` and
+`?key=`; adding a third param for something the protocol already handles is the kind of
+"just in case" surface area that costs more to maintain than to add later if a real need
+emerges. Leave it out unless a specific caller can't set `Accept`.
+
+**Open questions:**
+- Should the HTML page auto-refresh or poll instance state? Adds complexity but would show
+  the instance transitioning from `pending` → `running`. Probably not worth it for v1.
+
+---
+
 ## Composable setup command
 
 **Pain point:** `--setup-command` is a single opaque shell string the caller must assemble
