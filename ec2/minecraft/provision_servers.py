@@ -392,6 +392,10 @@ def cleanup_stale_services(current_provisioned: set[str], read_only: bool) -> No
         if not stem.startswith("minecraft-"):
             continue
         srv_id = stem[len("minecraft-"):]
+        # Not a game server: instance idle-shutdown oneshot (installed by setup.sh).
+        # Glob minecraft-*.service matches this file; "autoshutdown" is never in YAML.
+        if srv_id == "autoshutdown":
+            continue
         if srv_id not in current_provisioned:
             logger.info("Found stale service: %s → cleaning up", unit_file)
             if read_only:
