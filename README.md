@@ -4,6 +4,8 @@ An integrated automation for provisioning persistent game servers on AWS — fro
 
 The system is self-bootstrapping: the CloudFormation stack it deploys causes the EC2 instance to clone *this repository* at launch and run its own setup scripts. Infrastructure and application provisioning are unified in one coherent workflow.
 
+> **Returning after 2026-07 cost freeze:** World data lives in EBS snapshot **`snap-05f005f4d4b9d8048`** (`ap-southeast-4`, AZ `ap-southeast-4c`, 20 GiB, SurviveOrDie / 1_20_4). Current `persistent-resources.yaml` **cannot** restore from that snap — needs a later template cycle (`SnapshotId` / adopt existing volume). Full notes: **[docs/2026-07-26_cost-freeze-and-snapshot.md](docs/2026-07-26_cost-freeze-and-snapshot.md)**.
+
 ---
 
 ## What it does

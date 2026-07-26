@@ -25,11 +25,13 @@ Developer workstation
                                             └── minecraft-servers.yaml → per-server systemd units, start/stop scripts
 ```
 
-### AWS Resources — `GamePersistentStack` (singleton, never deleted)
+### AWS Resources — `GamePersistentStack` (singleton when running; may be absent while cost-frozen)
 | Resource | Type | Notes |
 |---|---|---|
-| `PersistentVolume` | EBS gp3 10 GB | `DeletionPolicy: Retain`; exports `VolumeId` |
+| `PersistentVolume` | EBS gp3 (was grown to 20 GB) | `DeletionPolicy: Retain`; exports `VolumeId` |
 | `PersistentEIP` | Elastic IP | `DeletionPolicy: Retain`; exports `AllocationId` and `PublicIp` |
+
+**2026-07 cost freeze:** Game stack torn down; world freeze snapshot **`snap-05f005f4d4b9d8048`** in `ap-southeast-4c`. Template does **not** yet support create-from-snapshot — see [docs/2026-07-26_cost-freeze-and-snapshot.md](docs/2026-07-26_cost-freeze-and-snapshot.md) before reinstall.
 
 ### AWS Resources — `GameStack-YYYYMMDD-HHMMSS` (ephemeral, reinstalled freely)
 | Resource | Type | Notes |
