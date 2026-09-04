@@ -2,7 +2,7 @@
 
 ## What happens
 
-When `git commit` runs outside PyCharm (e.g. via Claude Code / bash), PyCharm's Git log
+When `git commit` runs outside PyCharm (e.g. via an agent or bash), PyCharm's Git log
 view may not refresh to show the new commit. The tab title shows `Log: <old-ref>` instead
 of `Log: main`, and the branch tip appears stale. The commit exists in git — PyCharm's
 in-memory model just hasn't re-resolved where the branch pointer moved.

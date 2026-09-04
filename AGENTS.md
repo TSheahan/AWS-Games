@@ -1,4 +1,12 @@
-# AWS-Games — Project Guide for Claude Code
+# AWS-Games
+
+This file is the project entry point for agents. Directory-level `AGENTS.md` files add local context — load them when working in that tree:
+
+| Path | Load when |
+|------|-----------|
+| `bin/AGENTS.md` | Workstation tools (`reinstall_stack.py`, `instance.py`, …) |
+| `ec2/minecraft/AGENTS.md` | EC2-side Minecraft scripts and provisioner |
+| `docs/planning/AGENTS.md` | Planning files; changelog vs planning split |
 
 ## Project Purpose
 

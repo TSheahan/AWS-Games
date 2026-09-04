@@ -5,6 +5,19 @@ provide finer-grained detail; this log captures intent and trajectory.
 
 ---
 
+## 2026-09-04 — CLAUDE.md hierarchy renamed to AGENTS.md
+
+- Renamed the agent-context hierarchy from `CLAUDE.md` to `AGENTS.md` at repo root,
+  `bin/`, `ec2/minecraft/`, and `docs/planning/`
+- Root file is now harness-agnostic (no longer titled as a Claude Code guide) and
+  routes to the directory-level `AGENTS.md` files
+- `docs/planning/AGENTS.md` no longer points at Claude-specific private memory paths;
+  tracked planning files are the cross-harness authority for project intent
+- Historical CHANGELOG entries and provenance transcripts keep the `CLAUDE.md` name
+  they used at the time
+
+---
+
 ## 2026-03-09 — `minecraft autoshutdown` subcommand
 
 - Added `minecraft autoshutdown` subcommand to the EC2 admin wrapper with four
