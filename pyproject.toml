@@ -1,0 +1,17 @@
+# Venv maintain file. Not a package — do not `pip install .` against this.
+# Checkout sequence: ./setup.sh
+# requires-python is the only version contract (floor). No .python-version.
+
+[project]
+name = "aws-games"
+requires-python = ">=3.13"
+dependencies = [
+    "boto3~=1.42.97",
+    "pyyaml",
+    "botocore~=1.42.97",
+]
+
+[tool.project-setup]
+# Repository-root-relative paths written into the venv as a .pth on sync.
+# bin/ scripts are run as files, not imported. No shared include tree yet.
+pythonpath = []

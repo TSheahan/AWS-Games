@@ -1,4 +1,12 @@
-# AWS-Games — Project Guide for Claude Code
+# AWS-Games
+
+This file is the project entry point for agents. Directory-level `AGENTS.md` files add local context — load them when working in that tree:
+
+| Path | Load when |
+|------|-----------|
+| `bin/AGENTS.md` | Workstation tools (`reinstall_stack.py`, `instance.py`, …) |
+| `ec2/minecraft/AGENTS.md` | EC2-side Minecraft scripts and provisioner |
+| `docs/planning/AGENTS.md` | Planning files; changelog vs planning split |
 
 ## Project Purpose
 
@@ -25,13 +33,13 @@ Developer workstation
                                             └── minecraft-servers.yaml → per-server systemd units, start/stop scripts
 ```
 
-### AWS Resources — `GamePersistentStack` (singleton when running; may be absent while cost-frozen)
+### AWS Resources — `GamePersistentStack` (singleton; present as of 2026-09-27)
 | Resource | Type | Notes |
 |---|---|---|
-| `PersistentVolume` | EBS gp3 (was grown to 20 GB) | `DeletionPolicy: Retain`; exports `VolumeId` |
-| `PersistentEIP` | Elastic IP | `DeletionPolicy: Retain`; exports `AllocationId` and `PublicIp` |
+| `PersistentVolume` | EBS gp3 10 GiB `vol-017f3933a88deed00` in `ap-southeast-4c` | Blank disk. `DeletionPolicy: Retain`; exports `VolumeId` |
+| `PersistentEIP` | Elastic IP `16.26.227.159` | Imported `eipalloc-018f9c27d9bfa748e`. `DeletionPolicy: Retain`; exports `AllocationId` and `PublicIp` |
 
-**2026-07 cost freeze:** Game stack torn down; world freeze snapshot **`snap-05f005f4d4b9d8048`** in `ap-southeast-4c`. Template does **not** yet support create-from-snapshot — see [docs/2026-07-26_cost-freeze-and-snapshot.md](docs/2026-07-26_cost-freeze-and-snapshot.md) before reinstall.
+**2026-07 cost freeze:** Game stack is still down. SurviveOrDie files remain only in snapshot **`snap-05f005f4d4b9d8048`**. The old 20 GiB volume was deleted on 2026-09-27. The template still has no `SnapshotId`. See [docs/2026-07-26_cost-freeze-and-snapshot.md](docs/2026-07-26_cost-freeze-and-snapshot.md).
 
 ### AWS Resources — `GameStack-YYYYMMDD-HHMMSS` (ephemeral, reinstalled freely)
 | Resource | Type | Notes |
@@ -68,7 +76,8 @@ of the EIP and volume mid-session.
 | `ec2/minecraft/minecraft-completion.bash` | EC2 instance | Bash completion drop-in; installed to `/etc/bash_completion.d/` |
 | `ec2/minecraft/minecraft-autoshutdown` | EC2 instance | Idle-detection shutdown script (oneshot service + 30-min timer) |
 | `ec2/update-release.sh` | EC2 instance (ec2-user) | AL2023 release version upgrade helper |
-| `requirements.txt` | Workstation | boto3, pyyaml, botocore |
+| `pyproject.toml` | Workstation | Venv maintain file: deps, `requires-python` floor, include paths. Not a package |
+| `setup.sh` | Workstation | Checkout sequence: create `venv/`, install deps, write the include-path `.pth` |
 
 ---
 
@@ -171,6 +180,7 @@ After `CREATE_COMPLETE`:
 
 ## Development Conventions
 
+- Workstation Python is `venv/bin/python -B` after `./setup.sh`. Deps and include paths live in `pyproject.toml` (`requires-python` floor `>=3.13`). `bin/` scripts are run as files, not imported
 - Python tools in `bin/` use standard boto3 credential chain; `--profile` flag overrides
 - CloudFormation stack names are timestamped: `GameStack-YYYYMMDD-HHMMSS`
 - Template path is relative: `../cloudformation_server_stack.yaml` from `bin/`

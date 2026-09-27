@@ -4,7 +4,7 @@ An integrated automation for provisioning persistent game servers on AWS — fro
 
 The system is self-bootstrapping: the CloudFormation stack it deploys causes the EC2 instance to clone *this repository* at launch and run its own setup scripts. Infrastructure and application provisioning are unified in one coherent workflow.
 
-> **Returning after 2026-07 cost freeze:** World data lives in EBS snapshot **`snap-05f005f4d4b9d8048`** (`ap-southeast-4`, AZ `ap-southeast-4c`, 20 GiB, SurviveOrDie / 1_20_4). Current `persistent-resources.yaml` **cannot** restore from that snap — needs a later template cycle (`SnapshotId` / adopt existing volume). Full notes: **[docs/2026-07-26_cost-freeze-and-snapshot.md](docs/2026-07-26_cost-freeze-and-snapshot.md)**.
+> **2026-09-27:** `GamePersistentStack` is up: blank 10 GiB volume `vol-017f3933a88deed00` in `ap-southeast-4c`, public IP `16.26.227.159`. The game stack is not deployed. SurviveOrDie world data remains only in snapshot **`snap-05f005f4d4b9d8048`**. Notes: **[docs/2026-07-26_cost-freeze-and-snapshot.md](docs/2026-07-26_cost-freeze-and-snapshot.md)**.
 
 ---
 
@@ -101,13 +101,11 @@ Quick operational status display. Lists all `minecraft-*.service` units with col
 ## Developer workflow
 
 ```bash
-# One-time setup
-python -m venv venv
-source venv/bin/activate  # or venv\Scripts\activate on Windows
-pip install -r requirements.txt
+# One-time workstation checkout (venv/ at repo root, Python >= 3.13)
+./setup.sh
 
 # Deploy or redeploy
-python bin/reinstall_stack.py \
+venv/bin/python -B bin/reinstall_stack.py \
   --port-start 25565 \
   --port-end 25565 \
   --setup-command "./ec2/minecraft/setup.sh --server-version=1.21 \
@@ -145,7 +143,8 @@ screen -r minecraft
 
 ```
 cloudformation_server_stack.yaml   Infrastructure template
-requirements.txt                   Python dependencies (boto3, pyyaml)
+pyproject.toml                     Workstation deps and venv include paths
+setup.sh                           Workstation checkout: create venv/, install deps
 bin/
   reinstall_stack.py               Stack lifecycle management (workstation)
 ec2/

@@ -4,8 +4,13 @@ Tracked, public planning content. Forward-looking: strategic direction, side-que
 in-flight decisions, and carry-forward notes from working sessions.
 
 This directory is part of the public repo. Keep content project-relevant. Workstation-
-specific operational notes (SSH runbooks, active volume IDs, current IP) belong in private
-memory (`~/.claude/projects/.../memory/`), not here.
+specific operational notes (SSH runbooks, active volume IDs, current IP) belong in
+harness-private memory, not here.
+
+| File | Role |
+|------|------|
+| `strategic-direction.md` | Current priorities, constraints, and what remains |
+| `side-quests.md` | Opportunistic work off the critical path |
 
 ---
 
@@ -42,9 +47,12 @@ Example: `strategic-direction.md`
 
 ---
 
-## Relation to private memory (`~/.claude/projects/.../memory/`)
+## Relation to harness-private memory
 
-Private memory holds personal operational state: active volume IDs, current instance IP,
-SSH runbooks, and distilled stable knowledge Claude should carry into every session.
-`docs/planning/` holds project intent — what is planned, why, and what trade-offs were
-considered. The two complement each other; neither replaces the other.
+Harness-private memory (whatever the current agent stores outside the repo) may cache
+personal operational state: active volume IDs, current instance IP, SSH runbooks.
+It is not the project knowledge base. `docs/planning/` holds project intent — what is
+planned, why, and what trade-offs were considered.
+
+Tracked files in this repo are authoritative across harnesses. Private stores are not
+shared and must not hold exclusive project facts.

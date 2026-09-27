@@ -482,10 +482,14 @@ def main():
                 "ResourceIdentifier": {"VolumeId": args.import_volume_id},
             })
         if importing_eip:
+            # primaryIdentifier is the pair. AllocationId alone is rejected.
             resources_to_import.append({
                 "ResourceType": "AWS::EC2::EIP",
                 "LogicalResourceId": "PersistentEIP",
-                "ResourceIdentifier": {"AllocationId": args.import_allocation_id},
+                "ResourceIdentifier": {
+                    "PublicIp": addr["PublicIp"],
+                    "AllocationId": args.import_allocation_id,
+                },
             })
 
         imported_ids = {r["LogicalResourceId"] for r in resources_to_import}

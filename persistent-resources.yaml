@@ -12,10 +12,11 @@ Metadata:
       both have DeletionPolicy: Retain — they are not deleted even if this stack itself
       were deleted.
 
-      COST FREEZE 2026-07: Live world data may exist only as EBS snapshot
-      snap-05f005f4d4b9d8048 (ap-southeast-4c, 20 GiB, SurviveOrDie). This template still
-      creates a blank volume — it has no SnapshotId / existing-volume path. Revive requires
-      a later template (and tooling) cycle; see docs/2026-07-26_cost-freeze-and-snapshot.md.
+      COST FREEZE 2026-07: SurviveOrDie world data exists only as EBS snapshot
+      snap-05f005f4d4b9d8048. The 20 GiB source volume was deleted 2026-09-27.
+      This template still creates a blank volume — it has no SnapshotId path.
+      The live stack (2026-09-27) is a blank 10 GiB volume plus imported EIP
+      16.26.227.159. See docs/2026-07-26_cost-freeze-and-snapshot.md.
 
 Parameters:
   VolumeSize:

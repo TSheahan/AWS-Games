@@ -4,6 +4,19 @@
 **Region:** `ap-southeast-4` (Melbourne).  
 **Account (at freeze):** `613737894147`.
 
+## Status as of 2026-09-27
+
+`GamePersistentStack` is `UPDATE_COMPLETE` again. The game stack is not deployed; that is the next step.
+
+| Resource | Now |
+|----------|-----|
+| Volume | `vol-017f3933a88deed00` — blank 10 GiB gp3, `ap-southeast-4c`, stack logical id `PersistentVolume` |
+| Address | `16.26.227.159` / `eipalloc-018f9c27d9bfa748e`, imported into the stack |
+| Old volume | `vol-0f4cee5cb4bc42932` (20 GiB, SurviveOrDie) **deleted** |
+| Snapshot | `snap-05f005f4d4b9d8048` still `completed`. This is the only copy of those world files |
+
+The template still creates a blank volume. It has no `SnapshotId`. Restoring SurviveOrDie means creating a volume from the snapshot and adopting it; that was not this increment. `bin/setup_persistent_stack.py --import-allocation-id` already adopts a retained address. An EIP import identifier must include both `PublicIp` and `AllocationId`.
+
 ---
 
 ## What happened
@@ -23,7 +36,7 @@ For balance recovery, the **ephemeral game server stack** was torn down. World d
 
 An older 10 GiB snapshot (`backupppp`, Apr 2026) was **deleted** after the 20 GiB freeze snap completed — do not look for it.
 
-**EIP at freeze (may be released later for cost):** `16.26.227.159` / `eipalloc-018f9c27d9bfa748e`. A new persistent stack create will allocate a **new** public IP unless the template is taught to re-adopt a retained EIP.
+**EIP at freeze:** `16.26.227.159` / `eipalloc-018f9c27d9bfa748e`. It was retained and imported back into `GamePersistentStack` on 2026-09-27. See the status section above.
 
 ---
 
@@ -34,7 +47,7 @@ GamePersistentStack     ← EIP + EBS (persistent-resources.yaml); exports Volum
 GameStack-*             ← EC2 + attachment + SG; imports those exports
 ```
 
-Game stack was deleted first (allowed once imports were free). **`GamePersistentStack`** may still exist or may have been deleted afterward; both EIP and volume use **`DeletionPolicy: Retain`**, so stack delete alone does **not** remove them — manual delete is required for cost to drop to **snapshot storage only**.
+Game stack was deleted first (allowed once imports were free). **`GamePersistentStack`** was deleted the same day. Both EIP and volume used **`DeletionPolicy: Retain`**, so stack delete alone did not remove them. The retained 20 GiB volume was deleted on 2026-09-27 after the snapshot was confirmed. The address was imported into the new stack.
 
 ---
 

@@ -6,8 +6,9 @@ shows the reasoning, the prompting, and the decisions that produced it.
 
 ## conversations/
 
-Each file documents a Claude Code session, committed alongside or shortly after
-the code changes it produced.
+Each file documents an agent session, committed alongside or shortly after
+the code changes it produced. Early files were Claude Code sessions; later
+files may be any harness.
 
 **Naming convention:** `YYYYMMDD-HHMMSS_<desc>.md`
 

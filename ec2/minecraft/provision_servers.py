@@ -9,7 +9,7 @@ This script is intended to be run as root (typically from setup.sh or manually
 via the update wrapper script).
 
 Requires:
-- PyYAML (from requirements.txt)
+- PyYAML
 - Access to /mnt/persist (must be mounted)
 - git installed (from UserData bootstrap)
 

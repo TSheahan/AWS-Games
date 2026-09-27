@@ -118,6 +118,6 @@ changing the `ApiKey` CF parameter and redeploying.
 
 ## Python conventions
 
-- Dependencies: `boto3`, `pyyaml`, `botocore` (see `requirements.txt` in repo root)
+- Dependencies: `boto3`, `pyyaml`, `botocore` (see `pyproject.toml`). Invoke with `venv/bin/python -B` after `./setup.sh`
 - No custom session management beyond `boto3.Session(profile_name=...)` — use standard credential chain
 - `ClientError` and `WaiterError` from `botocore.exceptions` are the primary exception types handled

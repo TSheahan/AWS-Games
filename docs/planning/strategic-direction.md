@@ -1,6 +1,6 @@
 # AWS-Games Strategic Direction
 
-Last reviewed: 2026-03-08
+Last reviewed: 2026-09-04
 
 ---
 
@@ -10,9 +10,8 @@ Last reviewed: 2026-03-08
    actively used. The worst pain points were resolved in prior sessions.
 
 2. **Portfolio:** Enterprise-grade infrastructure tooling (CloudFormation, SSM, boto3,
-   systemd, production EBS/NVMe handling) developed through agentic co-work with Claude
-   Code and designed for agent-driven operation. `README.md` is the primary external
-   entry point.
+   systemd, production EBS/NVMe handling) developed through agentic co-work and designed
+   for agent-driven operation. `README.md` is the primary external entry point.
 
 3. **Extensibility:** `ec2/<game>/` structure is deliberately game-agnostic. A shared
    orchestration layer (`ec2/setup.sh`) is deferred until a second game type materialises —
@@ -36,7 +35,7 @@ portfolio signal. Don't extend for its own sake.
 *(Priority 0 was validating the provisioning chain end-to-end — completed 2026-03-04.
 See CHANGELOG.md for the full account.)*
 
-Claude Code as the control plane for routine infrastructure ops. Natural-language commands
+An agent as the control plane for routine infrastructure ops. Natural-language commands
 ("start the game server", "check server status", "redeploy with version X") map to
 tested, reliable execution sequences.
 
@@ -47,7 +46,7 @@ tested, reliable execution sequences.
 - Mobile control API — Lambda Function URL for start/stop from Android home screen shortcuts;
   no credential management required (capability URL pattern)
 - **Operational knowledge split** — resolved 2026-03-08. `memory/operations.md` previously
-  mixed personal state with system procedures; procedures migrated into the CLAUDE.md
+  mixed personal state with system procedures; procedures migrated into the AGENTS.md
   hierarchy (source-controlled, auto-loaded on every machine). `operations.md` now holds
   personal state only: active volume ID, ports, jar URL, redeployment runbook with real
   values. Playbooks are now viable — their prerequisites are in source-controlled context
