@@ -66,11 +66,17 @@ output suitable for agent consumption. `reprovision` calls `provision_servers.py
 
 ---
 
-## Design principle: provision_servers.py owns all server-specific setup
+## Design principle: generated service files vs. a server profile
 
-`setup.sh` handles instance-level concerns only: JDK install, JAR download to
-`/mnt/persist/minecraft/server_<version>.jar`. All server-specific work — folder creation,
-systemd units, start/stop scripts, `server.properties` — is owned by `provision_servers.py`,
-which `setup.sh` invokes at the end (`--update --provision`).
+`setup.sh` handles instance-level concerns only: JDK install, and one shared vanilla
+JAR at `/mnt/persist/minecraft/server_<version>.jar`. `provision_servers.py` owns the
+generated per-server files: the folder, `eula.txt`, `server.properties`, start/stop
+scripts, and the systemd unit. `setup.sh` invokes it at the end (`--update --provision`).
+The start command is copied from `minecraft-servers.yaml` and is not interpreted.
+
+A vanilla start command that launches the shared jar needs nothing further in the
+folder. A server may choose a mod loader. That choice is the start command plus extra
+files inside the server folder, and provisioning does not create them. Fabric is one
+such loader. See [instance-profiling.md](instance-profiling.md).
 
 Where behaviour overlaps (e.g. `TimeoutStopSec`), `provision_servers.py` is the reference.

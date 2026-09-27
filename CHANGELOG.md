@@ -5,6 +5,16 @@ provide finer-grained detail; this log captures intent and trajectory.
 
 ---
 
+## 2026-09-27 — Instance profiling notes
+
+- `ec2/minecraft/instance-profiling.md` records the gap between provisioning and a
+  start command that assumes a mod loader inside the server folder
+- Fabric is optional and chosen per server. The notes cover the
+  `fabric-server-launch.jar` installer profile and the DarkBoris 1.21.11 mod set
+  checked on the instance
+
+---
+
 ## 2026-09-27 — Persistent stack revived; workstation venv
 
 - `GamePersistentStack` recreated: blank 10 GiB gp3 `vol-017f3933a88deed00` in

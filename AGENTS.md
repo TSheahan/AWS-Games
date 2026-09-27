@@ -72,6 +72,7 @@ of the EIP and volume mid-session.
 | `bin/deploy_control_api.py` | Workstation | Deploy or update the mobile control API CloudFormation stack |
 | `ec2/minecraft/setup.sh` | EC2 instance (root, via UserData) | Instance-level setup: Java install, JAR download, invokes provision_servers.py |
 | `ec2/minecraft/provision_servers.py` | EC2 instance (root) | Multi-server systemd unit management |
+| `ec2/minecraft/instance-profiling.md` | Docs | Per-server loader and mod profile. Fabric is one optional loader |
 | `ec2/minecraft/minecraft` | EC2 instance | Admin wrapper; installed to `/home/ec2-user/bin/minecraft` |
 | `ec2/minecraft/minecraft-completion.bash` | EC2 instance | Bash completion drop-in; installed to `/etc/bash_completion.d/` |
 | `ec2/minecraft/minecraft-autoshutdown` | EC2 instance | Idle-detection shutdown script (oneshot service + 30-min timer) |
@@ -148,6 +149,12 @@ servers:
 provisioned:
   - server_id
 ```
+
+The start command is written into the generated start script unchanged. A command
+that launches the shared vanilla jar is finished once provisioning completes. A
+command that names a loader jar still needs that profile built in the server folder.
+Fabric is one loader a server may choose. See
+[ec2/minecraft/instance-profiling.md](ec2/minecraft/instance-profiling.md).
 
 ---
 
